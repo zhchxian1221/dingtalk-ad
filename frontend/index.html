@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>睿尔曼智能钉钉域控同步系统</title>
+    <!-- ElementPlus CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css">
+    <!-- Vue3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <!-- ElementPlus -->
+    <script src="https://unpkg.com/element-plus/dist/index.full.min.js"></script>
+    <!-- ElementPlus 中文语言包 -->
+    <script src="https://unpkg.com/element-plus/dist/locale/zh-cn.min.js"></script>
+    <!-- ElementPlus Icons -->
+    <script src="https://unpkg.com/@element-plus/icons-vue@2/dist/index.iife.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+        #app { height: 100vh; }
+
+        /* 顶部导航 */
+        .app-header {
+            background: linear-gradient(135deg, #1a237e 0%, #283593 50%, #3949ab 100%);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+            height: 60px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            z-index: 10;
+            position: relative;
+        }
+        .app-header .logo { font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+        .app-header .logo-icon { font-size: 28px; }
+        .app-header .header-right { margin-left: auto; font-size: 13px; opacity: 0.85; }
+
+        /* 侧边栏 */
+        .app-aside {
+            background: #304156;
+            width: 200px !important;
+            transition: width 0.3s;
+        }
+        .app-aside .el-menu {
+            border-right: none;
+            background: transparent;
+        }
+        .app-aside .el-menu-item {
+            color: #bfcbd9;
+            height: 50px;
+            line-height: 50px;
+        }
+        .app-aside .el-menu-item:hover { background: #263445 !important; color: #fff; }
+        .app-aside .el-menu-item.is-active { background: #1d8ce0 !important; color: #fff; }
+        .app-aside .el-menu-item .el-icon { font-size: 18px; margin-right: 8px; }
+
+        /* 内容区 */
+        .app-main {
+            background: #f0f2f5;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        /* 卡片 */
+        .stat-card {
+            border-radius: 8px;
+            overflow: hidden;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,0.12); }
+        .stat-card .el-card__body { padding: 20px; }
+        .stat-value { font-size: 32px; font-weight: 700; line-height: 1.2; }
+        .stat-label { font-size: 14px; color: #909399; margin-top: 6px; }
+        .stat-icon { font-size: 48px; opacity: 0.15; position: absolute; right: 16px; top: 50%; transform: translateY(-50%); }
+
+        /* 差异卡片 */
+        .diff-card { text-align: center; }
+        .diff-card .diff-value { font-size: 36px; font-weight: 700; }
+        .diff-card .diff-label { font-size: 14px; color: #909399; margin-top: 8px; }
+
+        /* 表格 */
+        .page-card { margin-bottom: 20px; border-radius: 8px; }
+        .page-card .el-card__body { padding: 16px 20px; }
+
+        .section-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+
+        /* 同步进度 */
+        .sync-progress { padding: 20px 0; text-align: center; }
+
+        /* 标签 */
+        .tag-success { color: #67c23a; }
+        .tag-danger { color: #f56c6c; }
+        .tag-warning { color: #e6a23c; }
+        .tag-info { color: #409eff; }
+
+        .empty-tip { padding: 40px; text-align: center; color: #c0c4cc; }
+
+        .pagination-wrap { margin-top: 16px; display: flex; justify-content: flex-end; }
+
+        .filter-bar { margin-bottom: 16px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    </style>
+</head>
+<body>
+<div id="app">
+    <el-container style="height: 100vh;">
+        <!-- 顶部导航 -->
+        <el-header class="app-header" height="60px">
+            <div class="logo">
+                <span class="logo-icon">🔄</span>
+                <span>睿尔曼智能钉钉域控同步系统</span>
+            </div>
+            <div class="header-right">
+                <span v-if="syncStatus.is_running" style="color: #ffd54f;">● 同步进行中</span>
+                <span v-else style="color: #81c784;">● 系统就绪</span>
+            </div>
+        </el-header>
+
+        <el-container>
+            <!-- 侧边栏 -->
+            <el-aside class="app-aside" width="200px">
+                <el-menu :default-active="activeMenu" @select="handleMenuSelect" background-color="#304156" text-color="#bfcbd9" active-text-color="#fff">
+                    <el-menu-item index="dashboard">
+                        <el-icon><Monitor /></el-icon>
+                        <span>仪表盘</span>
+                    </el-menu-item>
+                    <el-menu-item index="sync">
+                        <el-icon><Refresh /></el-icon>
+                        <span>同步管理</span>
+                    </el-menu-item>
+                    <el-menu-item index="logs">
+                        <el-icon><Document /></el-icon>
+                        <span>同步日志</span>
+                    </el-menu-item>
+                    <el-menu-item index="settings">
+                        <el-icon><Setting /></el-icon>
+                        <span>系统设置</span>
+                    </el-menu-item>
+                </el-menu>
+            </el-aside>
+
+            <!-- 主内容区 -->
+            <el-main class="app-main">
+
+                <!-- ==================== 仪表盘 ==================== -->
+                <div v-show="activeMenu === 'dashboard'">
+                    <div class="section-title"><el-icon><Monitor /></el-icon> 仪表盘</div>
+
+                    <!-- 统计卡片 -->
+                    <el-row :gutter="20" style="margin-bottom: 20px;">
+                        <el-col :span="6">
+                            <el-card class="stat-card" shadow="hover">
+                                <div style="position: relative;">
+                                    <div class="stat-value" style="color: #409eff;">{{ dashboardData.dingtalkCount }}</div>
+                                    <div class="stat-label">钉钉用户总数</div>
+                                    <el-icon class="stat-icon" style="color: #409eff;"><User /></el-icon>
+                                </div>
+                            </el-card>
+                        </el-col>
+                        <el-col :span="6">
+                            <el-card class="stat-card" shadow="hover">
+                                <div style="position: relative;">
+                                    <div class="stat-value" style="color: #67c23a;">{{ dashboardData.adCount }}</div>
+                                    <div class="stat-label">AD用户总数</div>
+                                    <el-icon class="stat-icon" style="color: #67c23a;"><UserFilled /></el-icon>
+                                </div>
+                            </el-card>
+                        </el-col>
+                        <el-col :span="6">
+                            <el-card class="stat-card" shadow="hover">
+                                <div style="position: relative;">
+                                    <div class="stat-value" style="color: #e6a23c; font-size: 18px; line-height: 2;">{{ dashboardData.lastSyncTime || '暂无' }}</div>
+                                    <div class="stat-label">上次同步时间</div>
+                                    <el-icon class="stat-icon" style="color: #e6a23c;"><Clock /></el-icon>
+                                </div>
+                            </el-card>
+                        </el-col>
+                        <el-col :span="6">
+                            <el-card class="stat-card" shadow="hover">
+                                <div style="position: relative;">
+                                    <div class="stat-value" :style="{color: getStatusColor(dashboardData.syncStatus)}">{{ getStatusText(dashboardData.syncStatus) }}</div>
+                                    <div class="stat-label">同步状态</div>
+                                    <el-icon class="stat-icon" :style="{color: getStatusColor(dashboardData.syncStatus)}"><CircleCheck /></el-icon>
+                                </div>
+                            </el-card>
+                        </el-col>
+                    </el-row>
+
+                    <!-- 差异统计 -->
+                    <el-card class="page-card" shadow="never">
+                        <div class="section-title"><el-icon><DataAnalysis /></el-icon> 同步差异预览</div>
+                        <el-row :gutter="20" v-loading="previewLoading">
+                            <el-col :span="6">
+                                <div class="diff-card">
+                                    <div class="diff-value" style="color: #67c23a;">{{ previewData.new_users?.length || 0 }}</div>
+                                    <div class="diff-label">待新增用户</div>
+                                </div>
+                            </el-col>
+                            <el-col :span="6">
+                                <div class="diff-card">
+                                    <div class="diff-value" style="color: #e6a23c;">{{ previewData.modified_users?.length || 0 }}</div>
+                                    <div class="diff-label">待修改用户</div>
+                                </div>
+                            </el-col>
+                            <el-col :span="6">
+                                <div class="diff-card">
+                                    <div class="diff-value" style="color: #f56c6c;">{{ previewData.disabled_users?.length || 0 }}</div>
+                                    <div class="diff-label">待禁用用户</div>
+                                </div>
+                            </el-col>
+                            <el-col :span="6">
+                                <div class="diff-card">
+                                    <div class="diff-value" style="color: #409eff;">{{ previewData.new_ous?.length || 0 }}</div>
+                                    <div class="diff-label">待创建OU</div>
+                                </div>
+                            </el-col>
+                        </el-row>
+                        <div style="margin-top: 20px; text-align: center;">
+                            <el-button type="primary" size="large" @click="loadPreview" :loading="previewLoading" :icon="Refresh">刷新差异预览</el-button>
+                            <el-button type="success" size="large" @click="quickSync" :loading="syncStatus.is_running" :icon="VideoPlay">立即同步</el-button>
+                        </div>
+                    </el-card>
+
+                    <!-- 上次同步详情 -->
+                    <el-card class="page-card" shadow="never" v-if="syncStatus.last_sync_total > 0 || syncStatus.last_error">
+                        <div class="section-title"><el-icon><InfoFilled /></el-icon> 上次同步详情</div>
+                        <el-descriptions :column="4" border>
+                            <el-descriptions-item label="同步时间">{{ syncStatus.last_sync_time || '-' }}</el-descriptions-item>
+                            <el-descriptions-item label="同步状态">
+                                <el-tag :type="getStatusTagType(syncStatus.last_sync_status)">{{ getStatusText(syncStatus.last_sync_status) }}</el-tag>
+                            </el-descriptions-item>
+                            <el-descriptions-item label="操作总数">{{ syncStatus.last_sync_total }}</el-descriptions-item>
+                            <el-descriptions-item label="成功/失败">
+                                <span class="tag-success">{{ syncStatus.last_sync_success }}</span> /
+                                <span class="tag-danger">{{ syncStatus.last_sync_failed }}</span>
+                            </el-descriptions-item>
+                        </el-descriptions>
+
+                        <!-- 错误详情 -->
+                        <div v-if="syncStatus.last_error" style="margin-top: 12px;">
+                            <el-alert
+                                title="同步失败原因"
+                                :description="syncStatus.last_error"
+                                type="error"
+                                show-icon
+                                :closable="false"
+                            />
+                        </div>
+                    </el-card>
+                </div>
+
+                <!-- ==================== 同步管理 ==================== -->
+                <div v-show="activeMenu === 'sync'">
+                    <div class="section-title"><el-icon><Refresh /></el-icon> 同步管理</div>
+
+                    <!-- 同步进度 -->
+                    <el-card class="page-card" shadow="never" v-if="syncStatus.is_running">
+                        <div class="sync-progress">
+                            <el-icon class="is-loading" style="font-size: 36px; color: #409eff; margin-bottom: 12px;"><Loading /></el-icon>
+                            <div style="font-size: 16px; color: #606266;">同步正在进行中，请耐心等待...</div>
+                        </div>
+                    </el-card>
+
+                    <!-- 操作按钮 -->
+                    <el-card class="page-card" shadow="never">
+                        <div style="display: flex; gap: 12px; align-items: center; justify-content: space-between;">
+                            <div>
+                                <el-button type="primary" @click="loadPreview" :loading="previewLoading" :icon="Refresh">刷新差异预览</el-button>
+                                <el-button type="success" @click="executeSync" :loading="syncStatus.is_running" :disabled="syncStatus.is_running" :icon="VideoPlay">执行同步</el-button>
+                            </div>
+                            <div style="color: #909399; font-size: 13px;">
+                                钉钉用户: {{ previewData.dingtalk_user_count || 0 }} | AD用户: {{ previewData.ad_user_count || 0 }}
+                            </div>
+                        </div>
+                    </el-card>
+
+                    <!-- 差异预览表格 -->
+                    <el-card class="page-card" shadow="never" v-loading="previewLoading">
+                        <el-tabs v-model="syncTab">
+                            <!-- 新增用户 -->
+                            <el-tab-pane :label="`新增用户 (${previewData.new_users?.length || 0})`" name="new">
+                                <el-table :data="previewData.new_users || []" stripe style="width: 100%" max-height="500">
+                                    <el-table-column type="index" label="#" width="50" />
+                                    <el-table-column prop="name" label="姓名" width="100" />
+                                    <el-table-column prop="sAMAccountName" label="登录名" width="140">
+                                        <template #default="{ row }">
+                                            <el-tag size="small" type="success">{{ row.sAMAccountName }}</el-tag>
+                                        </template>
+                                    </el-table-column>
+                                    <el-table-column prop="department" label="部门" width="150" />
+                                    <el-table-column prop="mobile" label="手机" width="130" />
+                                    <el-table-column prop="email" label="邮箱" width="200" />
+                                    <el-table-column prop="title" label="职位" width="120" />
+                                    <el-table-column prop="ou_path" label="目标OU" show-overflow-tooltip />
+                                </el-table>
+                                <div class="empty-tip" v-if="!previewData.new_users || previewData.new_users.length === 0">暂无新增用户</div>
+                            </el-tab-pane>
+
+                            <!-- 属性变更 -->
+                            <el-tab-pane :label="`属性变更 (${previewData.modified_users?.length || 0})`" name="modify">
+                                <el-table :data="previewData.modified_users || []" stripe style="width: 100%" max-height="500">
+                                    <el-table-column type="index" label="#" width="50" />
+                                    <el-table-column prop="name" label="姓名" width="100" />
+                                    <el-table-column prop="department" label="部门" width="150" />
+                                    <el-table-column label="变更内容" min-width="300">
+                                        <template #default="{ row }">
+                                            <div v-for="(value, key) in row.changes" :key="key" style="margin-bottom: 4px;">
+                                                <el-tag size="small" type="warning" style="margin-right: 6px;">{{ changeLabel(key) }}</el-tag>
+                                                <span style="color: #606266;">→ {{ value }}</span>
+                                            </div>
+                                        </template>
+                                    </el-table-column>
+                                    <el-table-column prop="needs_move" label="需移动OU" width="100" align="center">
+                                        <template #default="{ row }">
+                                            <el-tag v-if="row.needs_move" type="danger" size="small">是</el-tag>
+                                            <el-tag v-else type="info" size="small">否</el-tag>
+                                        </template>
+                                    </el-table-column>
+                                    <el-table-column prop="dn" label="当前DN" show-overflow-tooltip />
+                                </el-table>
+                                <div class="empty-tip" v-if="!previewData.modified_users || previewData.modified_users.length === 0">暂无属性变更</div>
+                            </el-tab-pane>
+
+                            <!-- 需禁用 -->
+                            <el-tab-pane :label="`需禁用 (${previewData.disabled_users?.length || 0})`" name="disable">
+                                <el-table :data="previewData.disabled_users || []" stripe style="width: 100%" max-height="500">
+                                    <el-table-column type="index" label="#" width="50" />
+                                    <el-table-column prop="name" label="姓名" width="120" />
+                                    <el-table-column prop="sAMAccountName" label="登录名" width="150" />
+                                    <el-table-column label="当前状态" width="100" align="center">
+                                        <template #default="{ row }">
+                                            <el-tag type="success" size="small">启用中</el-tag>
+                                        </template>
+                                    </el-table-column>
+                                    <el-table-column prop="dn" label="DN" show-overflow-tooltip />
+                                </el-table>
+                                <div class="empty-tip" v-if="!previewData.disabled_users || previewData.disabled_users.length === 0">暂无需要禁用的用户</div>
+                            </el-tab-pane>
+
+                            <!-- 待创建OU -->
+                            <el-tab-pane :label="`待创建OU (${previewData.new_ous?.length || 0})`" name="ou">
+                                <el-table :data="previewData.new_ous || []" stripe style="width: 100%" max-height="500">
+                                    <el-table-column type="index" label="#" width="50" />
+                                    <el-table-column prop="name" label="OU名称" width="200" />
+                                    <el-table-column prop="parent_dept" label="上级部门" width="150" />
+                                    <el-table-column prop="ou_path" label="OU路径" show-overflow-tooltip />
+                                </el-table>
+                                <div class="empty-tip" v-if="!previewData.new_ous || previewData.new_ous.length === 0">暂无需要创建的OU</div>
+                            </el-tab-pane>
+                        </el-tabs>
+                    </el-card>
+                </div>
+
+                <!-- ==================== 同步日志 ==================== -->
+                <div v-show="activeMenu === 'logs'">
+                    <div class="section-title"><el-icon><Document /></el-icon> 同步日志</div>
+
+                    <el-card class="page-card" shadow="never">
+                        <!-- 筛选栏 -->
+                        <div class="filter-bar">
+                            <el-select v-model="logFilter.operation_type" placeholder="操作类型" clearable style="width: 160px;" @change="loadLogs">
+                                <el-option label="创建OU" value="create_ou" />
+                                <el-option label="创建用户" value="create_user" />
+                                <el-option label="修改用户" value="modify_user" />
+                                <el-option label="移动用户" value="move_user" />
+                                <el-option label="禁用用户" value="disable_user" />
+                                <el-option label="创建安全组" value="create_group" />
+                                <el-option label="添加到组" value="add_to_group" />
+                                <el-option label="从组移除" value="remove_from_group" />
+                            </el-select>
+                            <el-select v-model="logFilter.status" placeholder="状态" clearable style="width: 120px;" @change="loadLogs">
+                                <el-option label="成功" value="success" />
+                                <el-option label="失败" value="failed" />
+                            </el-select>
+                            <el-button type="primary" @click="loadLogs" :icon="Search">查询</el-button>
+                            <el-button @click="resetLogFilter" :icon="RefreshLeft">重置</el-button>
+                        </div>
+
+                        <!-- 日志表格 -->
+                        <el-table :data="logData.logs" stripe style="width: 100%" v-loading="logLoading" max-height="600">
+                            <el-table-column prop="sync_time" label="时间" width="180">
+                                <template #default="{ row }">
+                                    {{ formatTime(row.sync_time) }}
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="operation_type" label="操作类型" width="120">
+                                <template #default="{ row }">
+                                    <el-tag :type="getOpTagType(row.operation_type)" size="small">{{ getOpText(row.operation_type) }}</el-tag>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="target_name" label="目标对象" width="150" />
+                            <el-table-column prop="status" label="状态" width="80" align="center">
+                                <template #default="{ row }">
+                                    <el-tag :type="row.status === 'success' ? 'success' : 'danger'" size="small">
+                                        {{ row.status === 'success' ? '成功' : '失败' }}
+                                    </el-tag>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="detail" label="详情" show-overflow-tooltip min-width="200" />
+                            <el-table-column prop="error_message" label="错误信息" show-overflow-tooltip min-width="200">
+                                <template #default="{ row }">
+                                    <span style="color: #f56c6c;">{{ row.error_message || '-' }}</span>
+                                </template>
+                            </el-table-column>
+                        </el-table>
+
+                        <!-- 分页 -->
+                        <div class="pagination-wrap">
+                            <el-pagination
+                                v-model:current-page="logFilter.page"
+                                v-model:page-size="logFilter.page_size"
+                                :total="logData.total"
+                                :page-sizes="[20, 50, 100]"
+                                layout="total, sizes, prev, pager, next, jumper"
+                                @size-change="loadLogs"
+                                @current-change="loadLogs"
+                            />
+                        </div>
+                    </el-card>
+                </div>
+
+                <!-- ==================== 系统设置 ==================== -->
+                <div v-show="activeMenu === 'settings'">
+                    <div class="section-title"><el-icon><Setting /></el-icon> 系统设置</div>
+
+                    <!-- 钉钉配置 -->
+                    <el-card class="page-card" shadow="never">
+                        <div class="section-title"><el-icon><Connection /></el-icon> 钉钉配置</div>
+                        <el-form :model="configForm" label-width="130px" style="max-width: 600px;">
+                            <el-form-item label="AppKey">
+                                <el-input v-model="configForm.dingtalk_app_key" placeholder="钉钉应用AppKey" />
+                            </el-form-item>
+                            <el-form-item label="AppSecret">
+                                <el-input v-model="configForm.dingtalk_app_secret" type="password" show-password placeholder="钉钉应用AppSecret" />
+                            </el-form-item>
+                            <el-form-item>
+                                <el-button type="primary" @click="testDingTalk" :loading="testDingTalkLoading" :icon="Link">测试连接</el-button>
+                            </el-form-item>
+                        </el-form>
+                    </el-card>
+
+                    <!-- AD配置 -->
+                    <el-card class="page-card" shadow="never">
+                        <div class="section-title"><el-icon><Monitor /></el-icon> AD域控配置</div>
+                        <el-form :model="configForm" label-width="130px" style="max-width: 600px;">
+                            <el-form-item label="服务器地址">
+                                <el-input v-model="configForm.ad_server" placeholder="如 192.168.1.10:389 或 192.168.1.10:636" />
+                            </el-form-item>
+                            <el-form-item label="管理员账号">
+                                <el-input v-model="configForm.ad_username" placeholder="如 administrator@corp.realman-robot.com" />
+                            </el-form-item>
+                            <el-form-item label="密码">
+                                <el-input v-model="configForm.ad_password" type="password" show-password placeholder="管理员密码" />
+                            </el-form-item>
+                            <el-form-item label="Base DN">
+                                <el-input v-model="configForm.ad_base_dn" placeholder="OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com" />
+                            </el-form-item>
+                            <el-form-item>
+                                <el-button type="primary" @click="testAD" :loading="testADLoading" :icon="Link">测试连接</el-button>
+                            </el-form-item>
+                        </el-form>
+                    </el-card>
+
+                    <!-- 同步策略 -->
+                    <el-card class="page-card" shadow="never">
+                        <div class="section-title"><el-icon><Tools /></el-icon> 同步策略</div>
+                        <el-form :model="configForm" label-width="130px" style="max-width: 600px;">
+                            <el-form-item label="初始密码">
+                                <el-input v-model="configForm.initial_password" type="password" show-password placeholder="新建AD用户初始密码" />
+                                <div style="font-size: 12px; color: #909399; margin-top: 4px;">需满足AD复杂度要求：大小写字母+数字+特殊字符</div>
+                            </el-form-item>
+                            <el-form-item label="禁用而非删除">
+                                <el-switch v-model="configForm.sync_strategy_disable" active-value="true" inactive-value="false" />
+                                <span style="margin-left: 12px; font-size: 13px; color: #909399;">开启后，钉钉中删除的用户在AD中只禁用不删除</span>
+                            </el-form-item>
+                        </el-form>
+                    </el-card>
+
+                    <!-- 定时任务 -->
+                    <el-card class="page-card" shadow="never">
+                        <div class="section-title"><el-icon><AlarmClock /></el-icon> 定时任务</div>
+                        <el-form :model="schedulerForm" label-width="130px" style="max-width: 600px;">
+                            <el-form-item label="启用定时同步">
+                                <el-switch v-model="schedulerForm.enabled" />
+                            </el-form-item>
+                            <el-form-item label="CRON表达式">
+                                <el-input v-model="schedulerForm.cron_expression" placeholder="如 0 2 * * *（每天凌晨2点）" style="width: 280px;" />
+                                <div style="margin-top: 8px; display: flex; gap: 8px;">
+                                    <el-button size="small" @click="setCronPreset('0 * * * *')">每小时</el-button>
+                                    <el-button size="small" @click="setCronPreset('0 2 * * *')">每天凌晨2点</el-button>
+                                    <el-button size="small" @click="setCronPreset('0 2 * * 1')">每周一凌晨2点</el-button>
+                                    <el-button size="small" @click="setCronPreset('0 2 1 * *')">每月1号凌晨2点</el-button>
+                                </div>
+                                <div style="font-size: 12px; color: #909399; margin-top: 4px;">格式：分 时 日 月 周（标准5段式CRON）</div>
+                            </el-form-item>
+                            <el-form-item>
+                                <el-button type="primary" @click="saveScheduler" :loading="saveSchedulerLoading" :icon="Check">保存定时任务</el-button>
+                            </el-form-item>
+                        </el-form>
+                    </el-card>
+
+                    <!-- 保存按钮 -->
+                    <div style="text-align: center; padding: 20px 0;">
+                        <el-button type="primary" size="large" @click="saveConfig" :loading="saveConfigLoading" :icon="Check">保存所有配置</el-button>
+                    </div>
+                </div>
+
+            </el-main>
+        </el-container>
+    </el-container>
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted, onUnmounted } = Vue;
+
+const app = createApp({
+    setup() {
+        // ==================== 响应式状态 ====================
+
+        const activeMenu = ref('dashboard');
+        const syncTab = ref('new');
+
+        // 仪表盘数据
+        const dashboardData = reactive({
+            dingtalkCount: 0,
+            adCount: 0,
+            lastSyncTime: '',
+            syncStatus: 'none',
+        });
+
+        // 同步状态
+        const syncStatus = reactive({
+            is_running: false,
+            last_sync_time: null,
+            last_sync_status: 'none',
+            last_sync_total: 0,
+            last_sync_success: 0,
+            last_sync_failed: 0,
+            last_error: null,
+        });
+
+        // 预览数据
+        const previewData = reactive({
+            new_ous: [],
+            new_users: [],
+            modified_users: [],
+            disabled_users: [],
+            new_groups: [],
+            group_membership: [],
+            dingtalk_user_count: 0,
+            ad_user_count: 0,
+            dingtalk_dept_count: 0,
+        });
+        const previewLoading = ref(false);
+
+        // 日志数据
+        const logData = reactive({
+            logs: [],
+            total: 0,
+        });
+        const logFilter = reactive({
+            page: 1,
+            page_size: 20,
+            operation_type: '',
+            status: '',
+        });
+        const logLoading = ref(false);
+
+        // 配置表单
+        const configForm = reactive({
+            dingtalk_app_key: '',
+            dingtalk_app_secret: '',
+            ad_server: '',
+            ad_username: '',
+            ad_password: '',
+            ad_base_dn: 'OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com',
+            sync_strategy_disable: 'true',
+            initial_password: 'Realman@2026',
+        });
+
+        // 定时任务表单
+        const schedulerForm = reactive({
+            cron_expression: '0 2 * * *',
+            enabled: false,
+        });
+
+        // 加载状态
+        const testDingTalkLoading = ref(false);
+        const testADLoading = ref(false);
+        const saveConfigLoading = ref(false);
+        const saveSchedulerLoading = ref(false);
+
+        // 轮询定时器
+        let statusTimer = null;
+
+        // ==================== API 工具函数 ====================
+
+        async function apiGet(url) {
+            try {
+                const resp = await fetch(url);
+                const data = await resp.json();
+                if (data.code === 200) {
+                    return data.data;
+                } else {
+                    ElementPlus.ElMessage.error(data.msg || '请求失败');
+                    return null;
+                }
+            } catch (e) {
+                ElementPlus.ElMessage.error('网络请求失败: ' + e.message);
+                return null;
+            }
+        }
+
+        async function apiPost(url, body) {
+            try {
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body || {})
+                });
+                const data = await resp.json();
+                if (data.code === 200) {
+                    return data;
+                } else {
+                    ElementPlus.ElMessage.error(data.msg || '请求失败');
+                    return null;
+                }
+            } catch (e) {
+                ElementPlus.ElMessage.error('网络请求失败: ' + e.message);
+                return null;
+            }
+        }
+
+        async function apiPut(url, body) {
+            try {
+                const resp = await fetch(url, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body || {})
+                });
+                const data = await resp.json();
+                if (data.code === 200) {
+                    return data;
+                } else {
+                    ElementPlus.ElMessage.error(data.msg || '请求失败');
+                    return null;
+                }
+            } catch (e) {
+                ElementPlus.ElMessage.error('网络请求失败: ' + e.message);
+                return null;
+            }
+        }
+
+        // ==================== 菜单切换 ====================
+
+        function handleMenuSelect(index) {
+            activeMenu.value = index;
+            if (index === 'dashboard') {
+                loadSyncStatus();
+            } else if (index === 'sync') {
+                loadSyncStatus();
+            } else if (index === 'logs') {
+                loadLogs();
+            } else if (index === 'settings') {
+                loadConfig();
+                loadScheduler();
+            }
+        }
+
+        // ==================== 同步状态 ====================
+
+        async function loadSyncStatus() {
+            const data = await apiGet('/api/sync/status');
+            if (data) {
+                Object.assign(syncStatus, data);
+                dashboardData.lastSyncTime = data.last_sync_time ? formatTime(data.last_sync_time) : '';
+                dashboardData.syncStatus = data.last_sync_status || 'none';
+            }
+        }
+
+        // ==================== 预览 ====================
+
+        async function loadPreview() {
+            previewLoading.value = true;
+            const data = await apiPost('/api/sync/preview');
+            previewLoading.value = false;
+            if (data) {
+                Object.assign(previewData, data.data);
+                dashboardData.dingtalkCount = data.data.dingtalk_user_count || 0;
+                dashboardData.adCount = data.data.ad_user_count || 0;
+                ElementPlus.ElMessage.success('差异预览已更新');
+            }
+        }
+
+        // ==================== 执行同步 ====================
+
+        async function executeSync() {
+            try {
+                await ElementPlus.ElMessageBox.confirm(
+                    '确认执行同步操作？系统将根据钉钉数据创建/修改/禁用AD用户。',
+                    '同步确认',
+                    { confirmButtonText: '确认同步', cancelButtonText: '取消', type: 'warning' }
+                );
+            } catch {
+                return;
+            }
+
+            const data = await apiPost('/api/sync/execute', { dry_run: false });
+            if (data) {
+                ElementPlus.ElMessage.success(data.msg || '同步已启动');
+                startStatusPolling();
+            }
+        }
+
+        async function quickSync() {
+            await executeSync();
+        }
+
+        function startStatusPolling() {
+            if (statusTimer) clearInterval(statusTimer);
+            loadSyncStatus();
+            statusTimer = setInterval(async () => {
+                await loadSyncStatus();
+                if (!syncStatus.is_running) {
+                    clearInterval(statusTimer);
+                    statusTimer = null;
+                    if (syncStatus.last_sync_status === 'success') {
+                        ElementPlus.ElMessage.success('同步完成！');
+                    } else if (syncStatus.last_sync_status === 'partial') {
+                        ElementPlus.ElMessage.warning('同步完成（部分失败）');
+                    } else if (syncStatus.last_sync_status === 'failed') {
+                        ElementPlus.ElMessage.error('同步失败');
+                    }
+                    // 刷新预览
+                    if (activeMenu.value === 'dashboard' || activeMenu.value === 'sync') {
+                        loadPreview();
+                    }
+                }
+            }, 2000);
+        }
+
+        // ==================== 日志 ====================
+
+        async function loadLogs() {
+            logLoading.value = true;
+            const params = new URLSearchParams({
+                page: logFilter.page,
+                page_size: logFilter.page_size,
+            });
+            if (logFilter.operation_type) params.append('operation_type', logFilter.operation_type);
+            if (logFilter.status) params.append('status', logFilter.status);
+
+            const data = await apiGet('/api/logs?' + params.toString());
+            logLoading.value = false;
+            if (data) {
+                logData.logs = data.logs;
+                logData.total = data.total;
+            }
+        }
+
+        function resetLogFilter() {
+            logFilter.page = 1;
+            logFilter.operation_type = '';
+            logFilter.status = '';
+            loadLogs();
+        }
+
+        // ==================== 配置 ====================
+
+        async function loadConfig() {
+            const data = await apiGet('/api/config');
+            if (data) {
+                configForm.dingtalk_app_key = data.dingtalk_app_key || '';
+                configForm.dingtalk_app_secret = data.dingtalk_app_secret || '';
+                configForm.ad_server = data.ad_server || '';
+                configForm.ad_username = data.ad_username || '';
+                configForm.ad_password = data.ad_password || '';
+                configForm.ad_base_dn = data.ad_base_dn || 'OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com';
+                configForm.sync_strategy_disable = data.sync_strategy_disable || 'true';
+                configForm.initial_password = data.initial_password || 'Realman@2026';
+            }
+        }
+
+        async function saveConfig() {
+            saveConfigLoading.value = true;
+            const data = await apiPut('/api/config', configForm);
+            saveConfigLoading.value = false;
+            if (data) {
+                ElementPlus.ElMessage.success('配置已保存');
+            }
+        }
+
+        async function testDingTalk() {
+            // 先保存配置再测试
+            await apiPut('/api/config', configForm);
+            testDingTalkLoading.value = true;
+            const data = await apiPost('/api/dingtalk/test');
+            testDingTalkLoading.value = false;
+            if (data && data.code === 200) {
+                ElementPlus.ElMessage.success('钉钉连接成功');
+            }
+        }
+
+        async function testAD() {
+            // 先保存配置再测试
+            await apiPut('/api/config', configForm);
+            testADLoading.value = true;
+            const data = await apiPost('/api/ad/test');
+            testADLoading.value = false;
+            if (data && data.code === 200) {
+                const secured = data.data && data.data.secured;
+                const msg = data.data && data.data.message || 'AD连接成功';
+                if (secured) {
+                    ElementPlus.ElMessage.success(msg);
+                } else {
+                    ElementPlus.ElMessage.warning(msg);
+                }
+            }
+        }
+
+        // ==================== 定时任务 ====================
+
+        async function loadScheduler() {
+            const data = await apiGet('/api/scheduler');
+            if (data) {
+                schedulerForm.cron_expression = data.cron_expression || '0 2 * * *';
+                schedulerForm.enabled = data.enabled || false;
+            }
+        }
+
+        async function saveScheduler() {
+            saveSchedulerLoading.value = true;
+            const data = await apiPut('/api/scheduler', schedulerForm);
+            saveSchedulerLoading.value = false;
+            if (data) {
+                ElementPlus.ElMessage.success('定时任务配置已保存');
+            }
+        }
+
+        function setCronPreset(cron) {
+            schedulerForm.cron_expression = cron;
+        }
+
+        // ==================== 工具函数 ====================
+
+        function formatTime(timeStr) {
+            if (!timeStr) return '-';
+            try {
+                const dt = new Date(timeStr);
+                const y = dt.getFullYear();
+                const m = String(dt.getMonth() + 1).padStart(2, '0');
+                const d = String(dt.getDate()).padStart(2, '0');
+                const h = String(dt.getHours()).padStart(2, '0');
+                const min = String(dt.getMinutes()).padStart(2, '0');
+                const s = String(dt.getSeconds()).padStart(2, '0');
+                return `${y}-${m}-${d} ${h}:${min}:${s}`;
+            } catch {
+                return timeStr;
+            }
+        }
+
+        function getStatusText(status) {
+            const map = { 'success': '成功', 'failed': '失败', 'partial': '部分成功', 'running': '运行中', 'none': '未同步' };
+            return map[status] || status;
+        }
+
+        function getStatusColor(status) {
+            const map = { 'success': '#67c23a', 'failed': '#f56c6c', 'partial': '#e6a23c', 'running': '#409eff', 'none': '#909399' };
+            return map[status] || '#909399';
+        }
+
+        function getStatusTagType(status) {
+            const map = { 'success': 'success', 'failed': 'danger', 'partial': 'warning', 'running': 'primary', 'none': 'info' };
+            return map[status] || 'info';
+        }
+
+        function getOpText(type) {
+            const map = { 'create_ou': '创建OU', 'create_user': '创建用户', 'modify_user': '修改用户', 'move_user': '移动用户', 'disable_user': '禁用用户', 'create_group': '创建安全组', 'add_to_group': '添加到组', 'remove_from_group': '从组移除' };
+            return map[type] || type;
+        }
+
+        function getOpTagType(type) {
+            const map = { 'create_ou': 'primary', 'create_user': 'success', 'modify_user': 'warning', 'move_user': 'info', 'disable_user': 'danger', 'create_group': 'primary', 'add_to_group': 'success', 'remove_from_group': 'warning' };
+            return map[type] || 'info';
+        }
+
+        function changeLabel(key) {
+            const map = { 'mail': '邮箱', 'mobile': '手机', 'title': '职位', 'employeeID': '工号', 'displayName': '显示名', 'move_to': '移动至' };
+            return map[key] || key;
+        }
+
+        // ==================== 生命周期 ====================
+
+        onMounted(() => {
+            loadSyncStatus();
+            // 定期刷新同步状态
+            statusTimer = setInterval(() => {
+                loadSyncStatus();
+            }, 10000);
+        });
+
+        onUnmounted(() => {
+            if (statusTimer) clearInterval(statusTimer);
+        });
+
+        return {
+            activeMenu,
+            syncTab,
+            dashboardData,
+            syncStatus,
+            previewData,
+            previewLoading,
+            logData,
+            logFilter,
+            logLoading,
+            configForm,
+            schedulerForm,
+            testDingTalkLoading,
+            testADLoading,
+            saveConfigLoading,
+            saveSchedulerLoading,
+            handleMenuSelect,
+            loadSyncStatus,
+            loadPreview,
+            executeSync,
+            quickSync,
+            loadLogs,
+            resetLogFilter,
+            loadConfig,
+            saveConfig,
+            testDingTalk,
+            testAD,
+            loadScheduler,
+            saveScheduler,
+            setCronPreset,
+            formatTime,
+            getStatusText,
+            getStatusColor,
+            getStatusTagType,
+            getOpText,
+            getOpTagType,
+            changeLabel,
+        };
+    }
+});
+
+// 注册 ElementPlus 图标
+for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
+    app.component(key, component);
+}
+
+app.use(ElementPlus, { locale: ElementPlusLocaleZhCn });
+app.mount('#app');
+</script>
+</body>
+</html>
