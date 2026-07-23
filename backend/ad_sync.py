@@ -45,7 +45,7 @@ def get_domain_from_base_dn(base_dn: str) -> str:
     """
     从Base DN中提取域名
 
-    例: OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com → corp.realman-robot.com
+    例: OU=Users,DC=example,DC=com → example.com
 
     Args:
         base_dn: LDAP Base DN
@@ -226,7 +226,7 @@ def get_groups_ou_path(base_dn: str, config: dict = None) -> str:
     """
     获取安全组OU路径
     如果config中有ad_groups_ou且非空，使用配置值
-    否则从base_dn自动推导：OU=Users,OU=REALMAN,DC=... → OU=Groups,OU=REALMAN,DC=...
+    否则从base_dn自动推导：OU=Users,DC=... → OU=Groups,DC=...
 
     Args:
         base_dn: AD根OU的DN
@@ -306,9 +306,9 @@ class ADSyncService:
 
         Args:
             server: AD服务器地址（如 192.168.1.10:389 或 ldaps://192.168.1.10:636）
-            username: 管理员账号（如 administrator@corp.realman-robot.com）
+            username: 管理员账号（如 administrator@your-domain.com）
             password: 密码
-            base_dn: 根OU的DN（如 OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com）
+            base_dn: 根OU的DN（如 OU=Users,DC=example,DC=com）
         """
         self.server_str = server
         self.username = username
@@ -611,7 +611,7 @@ class ADSyncService:
         upn = f"{sam_account_name}@{domain}"
         escaped_cn = escape_dn_value(cn)
         user_dn = f"CN={escaped_cn},{parent_dn}"
-        initial_password = user_data.get("initial_password", "Realman@2026")
+        initial_password = user_data.get("initial_password", "P@ssw0rd2026")
 
         # 构建用户属性
         attributes = {
@@ -1135,7 +1135,7 @@ async def preview_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
     Returns:
         差异信息字典
     """
-    base_dn = config.get("ad_base_dn", "OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com")
+    base_dn = config.get("ad_base_dn", "OU=Users,DC=example,DC=com")
 
     # 1. 获取钉钉部门和用户
     dingtalk_depts = await dingtalk_client.get_departments()
@@ -1346,8 +1346,8 @@ async def execute_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
     Returns:
         同步结果字典
     """
-    base_dn = config.get("ad_base_dn", "OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com")
-    initial_password = config.get("initial_password", "Realman@2026")
+    base_dn = config.get("ad_base_dn", "OU=Users,DC=example,DC=com")
+    initial_password = config.get("initial_password", "P@ssw0rd2026")
 
     total = 0
     success_count = 0

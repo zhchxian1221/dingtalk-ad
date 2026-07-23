@@ -190,22 +190,22 @@ class TestPrimaryDeptCRUD:
 class TestGetGroupsOuPath:
     """Test get_groups_ou_path function"""
 
-    BASE_DN = "OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com"
+    BASE_DN = "OU=Users,DC=example,DC=com"
 
     def test_auto_derive_empty_config(self):
         """With empty config dict, should auto-derive OU=Groups"""
         result = get_groups_ou_path(self.BASE_DN, {})
-        assert result == "OU=Groups,OU=REALMAN,DC=corp,DC=realman-robot,DC=com"
+        assert result == "OU=Groups,DC=example,DC=com"
 
     def test_auto_derive_none_config(self):
         """With None config, should auto-derive OU=Groups"""
         result = get_groups_ou_path(self.BASE_DN, None)
-        assert result == "OU=Groups,OU=REALMAN,DC=corp,DC=realman-robot,DC=com"
+        assert result == "OU=Groups,DC=example,DC=com"
 
     def test_auto_derive_no_config_arg(self):
         """With no config arg (default), should auto-derive OU=Groups"""
         result = get_groups_ou_path(self.BASE_DN)
-        assert result == "OU=Groups,OU=REALMAN,DC=corp,DC=realman-robot,DC=com"
+        assert result == "OU=Groups,DC=example,DC=com"
 
     def test_custom_config(self):
         """With ad_groups_ou set in config, should use it"""
@@ -223,7 +223,7 @@ class TestGetGroupsOuPath:
         """Empty string in ad_groups_ou should trigger auto-derive"""
         config = {"ad_groups_ou": ""}
         result = get_groups_ou_path(self.BASE_DN, config)
-        assert result == "OU=Groups,OU=REALMAN,DC=corp,DC=realman-robot,DC=com"
+        assert result == "OU=Groups,DC=example,DC=com"
 
 
 class TestGetSecurityGroupName:

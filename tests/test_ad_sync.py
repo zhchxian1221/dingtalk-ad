@@ -106,8 +106,8 @@ class TestGetDomainFromBaseDN:
 
     def test_standard_dn(self):
         """Standard multi-level domain"""
-        dn = "OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com"
-        assert get_domain_from_base_dn(dn) == "corp.realman-robot.com"
+        dn = "OU=Users,DC=example,DC=com"
+        assert get_domain_from_base_dn(dn) == "example.com"
 
     def test_single_dc(self):
         dn = "DC=example,DC=com"
@@ -115,7 +115,7 @@ class TestGetDomainFromBaseDN:
 
     def test_no_dc(self):
         """DN without DC components should return empty string"""
-        dn = "OU=Users,OU=REALMAN"
+        dn = "OU=Users,OU=COMPANY"
         assert get_domain_from_base_dn(dn) == ""
 
     def test_mixed_case_dc(self):

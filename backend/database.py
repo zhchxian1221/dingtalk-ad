@@ -21,9 +21,9 @@ DEFAULT_CONFIG = {
     "ad_server": "",
     "ad_username": "",
     "ad_password": "",
-    "ad_base_dn": "OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com",
+    "ad_base_dn": "OU=Users,DC=example,DC=com",
     "sync_strategy_disable": "true",
-    "initial_password": "Realman@2026",
+    "initial_password": "P@ssw0rd2026",
     "scheduler_cron": "0 2 * * *",
     "scheduler_enabled": "false",
     "ad_groups_ou": "",  # 安全组OU路径，空则自动从base_dn推导

@@ -153,7 +153,7 @@ async def create_ad_service() -> ADSyncService:
         server=ad_server,
         username=config.get("ad_username", ""),
         password=config.get("ad_password", ""),
-        base_dn=config.get("ad_base_dn", "OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com")
+        base_dn=config.get("ad_base_dn", "OU=Users,DC=example,DC=com")
     )
 
 
@@ -300,7 +300,7 @@ async def clear_all_ad_data():
 
         ad_service = await create_ad_service()
         config = await Database.get_all_config()
-        base_dn = config.get("ad_base_dn", "OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com")
+        base_dn = config.get("ad_base_dn", "OU=Users,DC=example,DC=com")
         groups_ou = get_groups_ou_path(base_dn, config)
 
         try:

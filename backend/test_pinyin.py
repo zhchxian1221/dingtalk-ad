@@ -93,7 +93,7 @@ def test_generate_sam_priority():
     # (用户数据, 期望输出, 说明)
     cases = [
         (
-            {"email": "zhangsan@realman.com", "account": "张三", "userid": "001", "name": "张三"},
+            {"email": "zhangsan@example.com", "account": "张三", "userid": "001", "name": "张三"},
             "zhangsan",
             "优先级1: 邮箱前缀优先",
         ),
@@ -242,7 +242,7 @@ def test_regression():
 
     # get_domain_from_base_dn 回归
     domain_cases = [
-        ("OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com", "corp.realman-robot.com", "多级域名"),
+        ("OU=Users,DC=example,DC=com", "example.com", "多级域名"),
         ("DC=example,DC=com", "example.com", "简单域名"),
     ]
     for base_dn, expected, note in domain_cases:
