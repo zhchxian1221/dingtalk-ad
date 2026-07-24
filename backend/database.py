@@ -75,6 +75,12 @@ async def init_db():
         except Exception:
             pass  # 列已存在
 
+        # 兼容旧数据库：添加 sync_batch_id 列（如果不存在）
+        try:
+            await db.execute("ALTER TABLE sync_logs ADD COLUMN sync_batch_id TEXT")
+        except Exception:
+            pass  # 列已存在
+
         # 用户主部门覆盖表（管理员手动指定用户的主部门）
         await db.execute("""
             CREATE TABLE IF NOT EXISTS user_primary_dept (
@@ -158,13 +164,24 @@ class Database:
         target_name: str = "",
         status: str = "success",
         detail: str = "",
-        error_message: str = ""
+        error_message: str = "",
+        sync_batch_id: str = ""
     ):
-        """添加同步日志"""
+        """添加同步日志
+
+        Args:
+            operation_type: 操作类型（如 create_ou, create_user, sync_summary 等）
+            target_dn: 目标对象的DN
+            target_name: 目标对象名称
+            status: 操作状态（success / failed / skipped）
+            detail: 详情（JSON字符串或纯文本）
+            error_message: 错误信息（失败时填写）
+            sync_batch_id: 同步批次ID（同一次同步产生的日志共享同一个batch_id）
+        """
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""
-                INSERT INTO sync_logs (sync_time, operation_type, target_dn, target_name, status, detail, error_message)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO sync_logs (sync_time, operation_type, target_dn, target_name, status, detail, error_message, sync_batch_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 datetime.now().isoformat(),
                 operation_type,
@@ -172,7 +189,8 @@ class Database:
                 target_name,
                 status,
                 detail,
-                error_message
+                error_message,
+                sync_batch_id
             ))
             await db.commit()
 
@@ -181,9 +199,21 @@ class Database:
         page: int = 1,
         page_size: int = 20,
         operation_type: Optional[str] = None,
-        status: Optional[str] = None
+        status: Optional[str] = None,
+        sync_batch_id: Optional[str] = None
     ) -> dict:
-        """分页获取同步日志"""
+        """分页获取同步日志
+
+        Args:
+            page: 页码（从1开始）
+            page_size: 每页条数
+            operation_type: 操作类型筛选
+            status: 状态筛选
+            sync_batch_id: 同步批次ID筛选
+
+        Returns:
+            包含 logs 列表和分页信息的字典
+        """
         offset = (page - 1) * page_size
         conditions = []
         params = []
@@ -194,6 +224,9 @@ class Database:
         if status:
             conditions.append("status = ?")
             params.append(status)
+        if sync_batch_id:
+            conditions.append("sync_batch_id = ?")
+            params.append(sync_batch_id)
 
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
@@ -204,7 +237,7 @@ class Database:
 
             # 查询分页数据
             query = f"""
-                SELECT id, sync_time, operation_type, target_dn, target_name, status, detail, error_message
+                SELECT id, sync_time, operation_type, target_dn, target_name, status, detail, error_message, sync_batch_id
                 FROM sync_logs{where_clause}
                 ORDER BY sync_time DESC
                 LIMIT ? OFFSET ?
@@ -222,7 +255,8 @@ class Database:
                     "target_name": row[4],
                     "status": row[5],
                     "detail": row[6],
-                    "error_message": row[7]
+                    "error_message": row[7],
+                    "sync_batch_id": row[8] if len(row) > 8 else None
                 })
 
             return {
@@ -237,7 +271,7 @@ class Database:
         """获取单条日志详情"""
         async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute(
-                "SELECT id, sync_time, operation_type, target_dn, target_name, status, detail, error_message FROM sync_logs WHERE id = ?",
+                "SELECT id, sync_time, operation_type, target_dn, target_name, status, detail, error_message, sync_batch_id FROM sync_logs WHERE id = ?",
                 (log_id,)
             )
             row = await cursor.fetchone()
@@ -251,8 +285,168 @@ class Database:
                 "target_name": row[4],
                 "status": row[5],
                 "detail": row[6],
-                "error_message": row[7]
+                "error_message": row[7],
+                "sync_batch_id": row[8] if len(row) > 8 else None
             }
+
+    @staticmethod
+    async def get_batch_summary(batch_id: str) -> Optional[dict]:
+        """获取单次同步批次的统计摘要
+
+        按操作类型分组统计 success / failed / skipped 计数，并返回总计。
+
+        Args:
+            batch_id: 同步批次ID
+
+        Returns:
+            批次统计字典，包含:
+            - batch_id: 批次ID
+            - sync_time: 批次开始时间
+            - operations: {operation_type: {success: N, failed: N, skipped: N}}
+            - total / success / failed / skipped: 汇总计数
+            如果批次不存在则返回 None
+        """
+        async with aiosqlite.connect(DB_PATH) as db:
+            # 验证批次存在并获取最早时间
+            cursor = await db.execute(
+                "SELECT sync_time FROM sync_logs WHERE sync_batch_id = ? ORDER BY sync_time ASC LIMIT 1",
+                (batch_id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+
+            sync_time = row[0]
+
+            # 按操作类型和状态分组统计（排除 sync_summary 摘要日志本身）
+            cursor = await db.execute(
+                "SELECT operation_type, status, COUNT(*) FROM sync_logs "
+                "WHERE sync_batch_id = ? AND operation_type != 'sync_summary' "
+                "GROUP BY operation_type, status",
+                (batch_id,)
+            )
+            rows = await cursor.fetchall()
+
+            operations: dict = {}
+            total_count = 0
+            total_success = 0
+            total_failed = 0
+            total_skipped = 0
+
+            for op_type, op_status, count in rows:
+                if op_type not in operations:
+                    operations[op_type] = {"success": 0, "failed": 0, "skipped": 0}
+                operations[op_type][op_status] = operations[op_type].get(op_status, 0) + count
+
+                total_count += count
+                if op_status == "success":
+                    total_success += count
+                elif op_status == "failed":
+                    total_failed += count
+                elif op_status == "skipped":
+                    total_skipped += count
+
+            return {
+                "batch_id": batch_id,
+                "sync_time": sync_time,
+                "operations": operations,
+                "total": total_count,
+                "success": total_success,
+                "failed": total_failed,
+                "skipped": total_skipped,
+            }
+
+    @staticmethod
+    async def get_recent_batches(limit: int = 20) -> list:
+        """获取最近的同步批次列表
+
+        按 sync_batch_id 分组，返回每个批次的统计摘要。
+
+        Args:
+            limit: 返回的最大批次数
+
+        Returns:
+            批次列表，每条含:
+            - batch_id: 批次ID
+            - sync_time: 批次开始时间
+            - end_time: 批次结束时间
+            - total / success / failed / skipped: 操作统计
+            - status: 整体状态（success / partial / skipped / failed）
+        """
+        async with aiosqlite.connect(DB_PATH) as db:
+            # 按 batch_id 分组获取批次列表
+            cursor = await db.execute(
+                """
+                SELECT sync_batch_id,
+                       MIN(sync_time) as start_time,
+                       MAX(sync_time) as end_time,
+                       COUNT(*) as total_ops
+                FROM sync_logs
+                WHERE sync_batch_id IS NOT NULL AND sync_batch_id != ''
+                GROUP BY sync_batch_id
+                ORDER BY start_time DESC
+                LIMIT ?
+                """,
+                (limit,)
+            )
+            batch_rows = await cursor.fetchall()
+
+            batches = []
+            for batch_id, start_time, end_time, _total_ops in batch_rows:
+                # 查询该批次的操作统计（按操作类型+状态分组，排除 sync_summary 摘要日志）
+                cursor = await db.execute(
+                    "SELECT operation_type, status, COUNT(*) FROM sync_logs "
+                    "WHERE sync_batch_id = ? AND operation_type != 'sync_summary' "
+                    "GROUP BY operation_type, status",
+                    (batch_id,)
+                )
+                op_rows = await cursor.fetchall()
+
+                success = 0
+                failed = 0
+                skipped = 0
+                operations: dict = {}
+                for op_type, op_status, cnt in op_rows:
+                    if op_type not in operations:
+                        operations[op_type] = {"success": 0, "failed": 0, "skipped": 0}
+                    operations[op_type][op_status] = operations[op_type].get(op_status, 0) + cnt
+
+                    if op_status == "success":
+                        success += cnt
+                    elif op_status == "failed":
+                        failed += cnt
+                    elif op_status == "skipped":
+                        skipped += cnt
+
+                actual_total = success + failed + skipped
+
+                # 查询摘要日志获取整体状态
+                cursor = await db.execute(
+                    "SELECT status FROM sync_logs "
+                    "WHERE sync_batch_id = ? AND operation_type = 'sync_summary' LIMIT 1",
+                    (batch_id,)
+                )
+                summary_row = await cursor.fetchone()
+                if summary_row:
+                    overall_status = summary_row[0]
+                elif failed > 0:
+                    overall_status = "partial"
+                else:
+                    overall_status = "success"
+
+                batches.append({
+                    "batch_id": batch_id,
+                    "sync_time": start_time,
+                    "end_time": end_time,
+                    "total": actual_total,
+                    "success": success,
+                    "failed": failed,
+                    "skipped": skipped,
+                    "status": overall_status,
+                    "operations": operations,
+                })
+
+            return batches
 
     # ==================== 同步状态操作 ====================
 

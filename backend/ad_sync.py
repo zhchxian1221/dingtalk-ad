@@ -12,6 +12,7 @@ import subprocess
 import logging
 from datetime import datetime
 from typing import Optional
+from uuid import uuid4
 from ldap3 import Server, Connection, ALL, MODIFY_REPLACE, MODIFY_ADD, MODIFY_DELETE, SUBTREE, BASE, LEVEL, Tls
 from ldap3.core.exceptions import LDAPException
 from pypinyin import lazy_pinyin
@@ -729,18 +730,6 @@ class ADSyncService:
             logger.error(f"启用AD用户异常: {dn}, {e}")
             return False
 
-        except LDAPException as e:
-            logger.error(f"创建安全组异常: {group_dn}, {e}")
-            return False
-
-        except LDAPException as e:
-            logger.error(f"添加用户到组异常: {user_dn} → {group_dn}, {e}")
-            return False
-
-        except LDAPException as e:
-            logger.error(f"从组移除用户异常: {user_dn} ← {group_dn}, {e}")
-            return False
-
     def delete_user(self, dn: str) -> bool:
         """
         删除AD用户
@@ -761,10 +750,6 @@ class ADSyncService:
             return False
         except LDAPException as e:
             logger.error(f"删除AD用户异常: {dn}, {e}")
-            return False
-
-        except LDAPException as e:
-            logger.error(f"删除AD安全组异常: {dn}, {e}")
             return False
 
     def delete_ou(self, dn: str) -> bool:
@@ -1017,9 +1002,21 @@ async def execute_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
     base_dn = config.get("ad_base_dn", "OU=Users,DC=example,DC=com")
     initial_password = config.get("initial_password", "P@ssw0rd2026")
 
+    # 生成本次同步的唯一批次ID
+    sync_batch_id = str(uuid4())
+
     total = 0
     success_count = 0
     failed_count = 0
+
+    # 批次操作统计（用于 summary 日志）
+    batch_stats: dict = {}
+
+    def _track(op_type: str, op_status: str):
+        """记录批次操作统计"""
+        if op_type not in batch_stats:
+            batch_stats[op_type] = {"success": 0, "failed": 0, "skipped": 0}
+        batch_stats[op_type][op_status] = batch_stats[op_type].get(op_status, 0) + 1
 
     await db.update_sync_status(is_running=True, last_sync_status="running")
 
@@ -1057,33 +1054,39 @@ async def execute_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
                     result = await asyncio.to_thread(ad_service.create_ou, dept["name"], parent_dn)
                     if result:
                         success_count += 1
+                        _track("create_ou", "success")
                         existing_ous.append(ou_path)
                         await db.add_log(
                             operation_type="create_ou",
                             target_dn=ou_path,
                             target_name=dept["name"],
                             status="success",
-                            detail=json.dumps({"ou_name": dept["name"], "parent": parent_dn}, ensure_ascii=False)
+                            detail=json.dumps({"ou_name": dept["name"], "parent": parent_dn}, ensure_ascii=False),
+                            sync_batch_id=sync_batch_id
                         )
                     else:
                         failed_count += 1
+                        _track("create_ou", "failed")
                         failed_parent_ids.add(dept["dept_id"])
                         await db.add_log(
                             operation_type="create_ou",
                             target_dn=ou_path,
                             target_name=dept["name"],
                             status="failed",
-                            error_message=f"创建OU返回失败 (parent={parent_dn})"
+                            error_message=f"创建OU返回失败 (parent={parent_dn})",
+                            sync_batch_id=sync_batch_id
                         )
                 except Exception as e:
                     failed_count += 1
+                    _track("create_ou", "failed")
                     failed_parent_ids.add(dept["dept_id"])
                     await db.add_log(
                         operation_type="create_ou",
                         target_dn=ou_path,
                         target_name=dept["name"],
                         status="failed",
-                        error_message=str(e)
+                        error_message=str(e),
+                        sync_batch_id=sync_batch_id
                     )
 
         # 5. 构建用户映射
@@ -1117,30 +1120,36 @@ async def execute_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
                 )
                 if result:
                     success_count += 1
+                    _track("create_user", "success")
                     await db.add_log(
                         operation_type="create_user",
                         target_dn=dn_or_error,
                         target_name=name,
                         status="success",
-                        detail=json.dumps({"userid": dt_user.get("userid", ""), "department": dept_map.get(dept_id, {}).get("name", "")}, ensure_ascii=False)
+                        detail=json.dumps({"userid": dt_user.get("userid", ""), "department": dept_map.get(dept_id, {}).get("name", "")}, ensure_ascii=False),
+                        sync_batch_id=sync_batch_id
                     )
                 else:
                     failed_count += 1
+                    _track("create_user", "failed")
                     await db.add_log(
                         operation_type="create_user",
                         target_dn=f"CN={name},{ou_path}",
                         target_name=name,
                         status="failed",
-                        error_message=dn_or_error
+                        error_message=dn_or_error,
+                        sync_batch_id=sync_batch_id
                     )
             except Exception as e:
                 failed_count += 1
+                _track("create_user", "failed")
                 await db.add_log(
                     operation_type="create_user",
                     target_dn=f"CN={name},{ou_path}",
                     target_name=name,
                     status="failed",
-                    error_message=str(e)
+                    error_message=str(e),
+                    sync_batch_id=sync_batch_id
                 )
 
         # 7. 修改和移动已有用户
@@ -1168,31 +1177,37 @@ async def execute_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
                     result = await asyncio.to_thread(ad_service.move_user, current_dn, expected_ou)
                     if result:
                         success_count += 1
+                        _track("move_user", "success")
                         actual_dn = f"CN={escape_dn_value(name)},{expected_ou}"
                         await db.add_log(
                             operation_type="move_user",
                             target_dn=current_dn,
                             target_name=name,
                             status="success",
-                            detail=json.dumps({"from": current_dn, "to": actual_dn}, ensure_ascii=False)
+                            detail=json.dumps({"from": current_dn, "to": actual_dn}, ensure_ascii=False),
+                            sync_batch_id=sync_batch_id
                         )
                     else:
                         failed_count += 1
+                        _track("move_user", "failed")
                         await db.add_log(
                             operation_type="move_user",
                             target_dn=current_dn,
                             target_name=name,
                             status="failed",
-                            error_message="移动用户失败"
+                            error_message="移动用户失败",
+                            sync_batch_id=sync_batch_id
                         )
                 except Exception as e:
                     failed_count += 1
+                    _track("move_user", "failed")
                     await db.add_log(
                         operation_type="move_user",
                         target_dn=current_dn,
                         target_name=name,
                         status="failed",
-                        error_message=str(e)
+                        error_message=str(e),
+                        sync_batch_id=sync_batch_id
                     )
 
             # 检查属性变更
@@ -1214,30 +1229,36 @@ async def execute_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
                     result = await asyncio.to_thread(ad_service.modify_user, actual_dn, changes)
                     if result:
                         success_count += 1
+                        _track("modify_user", "success")
                         await db.add_log(
                             operation_type="modify_user",
                             target_dn=actual_dn,
                             target_name=name,
                             status="success",
-                            detail=json.dumps(changes, ensure_ascii=False)
+                            detail=json.dumps(changes, ensure_ascii=False),
+                            sync_batch_id=sync_batch_id
                         )
                     else:
                         failed_count += 1
+                        _track("modify_user", "failed")
                         await db.add_log(
                             operation_type="modify_user",
                             target_dn=actual_dn,
                             target_name=name,
                             status="failed",
-                            error_message="修改属性失败"
+                            error_message="修改属性失败",
+                            sync_batch_id=sync_batch_id
                         )
                 except Exception as e:
                     failed_count += 1
+                    _track("modify_user", "failed")
                     await db.add_log(
                         operation_type="modify_user",
                         target_dn=actual_dn,
                         target_name=name,
                         status="failed",
-                        error_message=str(e)
+                        error_message=str(e),
+                        sync_batch_id=sync_batch_id
                     )
 
         # 8. 禁用AD中多余的账号（钉钉中已不存在的用户）
@@ -1271,38 +1292,46 @@ async def execute_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
                     result = await asyncio.to_thread(ad_service.disable_user, ad_user["dn"])
                     if result:
                         success_count += 1
+                        _track("disable_user", "success")
                         await db.add_log(
                             operation_type="disable_user",
                             target_dn=ad_user["dn"],
                             target_name=name,
                             status="success",
-                            detail=json.dumps({"reason": "钉钉中不存在该用户"}, ensure_ascii=False)
+                            detail=json.dumps({"reason": "钉钉中不存在该用户"}, ensure_ascii=False),
+                            sync_batch_id=sync_batch_id
                         )
                     else:
                         failed_count += 1
+                        _track("disable_user", "failed")
                         await db.add_log(
                             operation_type="disable_user",
                             target_dn=ad_user["dn"],
                             target_name=name,
                             status="failed",
-                            error_message="禁用用户失败"
+                            error_message="禁用用户失败",
+                            sync_batch_id=sync_batch_id
                         )
                 except Exception as e:
                     failed_count += 1
+                    _track("disable_user", "failed")
                     await db.add_log(
                         operation_type="disable_user",
                         target_dn=ad_user["dn"],
                         target_name=name,
                         status="failed",
-                        error_message=str(e)
+                        error_message=str(e),
+                        sync_batch_id=sync_batch_id
                     )
         else:
+            _track("disable_user", "skipped")
             await db.add_log(
                 operation_type="disable_user",
                 target_dn="N/A",
                 target_name="[安全保护]",
                 status="skipped",
-                detail=json.dumps({"reason": disable_reason}, ensure_ascii=False)
+                detail=json.dumps({"reason": disable_reason}, ensure_ascii=False),
+                sync_batch_id=sync_batch_id
             )
 
         # 9. 更新同步状态
@@ -1316,6 +1345,21 @@ async def execute_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
             last_sync_failed=failed_count
         )
 
+        # 10. 记录批次摘要日志
+        if skip_disable and total == 0:
+            summary_status = "skipped"
+        elif failed_count == 0:
+            summary_status = "success"
+        else:
+            summary_status = "partial"
+
+        await db.add_log(
+            operation_type="sync_summary",
+            status=summary_status,
+            detail=json.dumps(batch_stats, ensure_ascii=False),
+            sync_batch_id=sync_batch_id
+        )
+
         logger.info(f"同步完成: 总计{total}, 成功{success_count}, 失败{failed_count}")
 
         return {
@@ -1323,6 +1367,7 @@ async def execute_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
             "success": success_count,
             "failed": failed_count,
             "status": final_status,
+            "sync_batch_id": sync_batch_id,
         }
 
     except Exception as e:
@@ -1334,6 +1379,13 @@ async def execute_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
             last_sync_total=total,
             last_sync_success=success_count,
             last_sync_failed=failed_count
+        )
+        # 记录批次摘要日志（异常终止）
+        await db.add_log(
+            operation_type="sync_summary",
+            status="failed",
+            detail=json.dumps(batch_stats, ensure_ascii=False),
+            sync_batch_id=sync_batch_id
         )
         raise
     finally:

@@ -489,20 +489,46 @@ async def get_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     operation_type: Optional[str] = Query(None),
-    status: Optional[str] = Query(None)
+    status: Optional[str] = Query(None),
+    sync_batch_id: Optional[str] = Query(None)
 ):
-    """获取同步日志列表（分页）"""
+    """获取同步日志列表（分页，支持按批次筛选）"""
     try:
         result = await Database.get_logs(
             page=page,
             page_size=page_size,
             operation_type=operation_type,
-            status=status
+            status=status,
+            sync_batch_id=sync_batch_id
         )
         return success(result)
     except Exception as e:
         logger.error(f"获取同步日志失败: {e}")
         return error(f"获取同步日志失败: {str(e)}")
+
+
+@app.get("/api/logs/batches")
+async def get_log_batches():
+    """获取最近同步批次列表（含统计摘要）"""
+    try:
+        batches = await Database.get_recent_batches(limit=20)
+        return success({"batches": batches, "count": len(batches)})
+    except Exception as e:
+        logger.error(f"获取同步批次列表失败: {e}")
+        return error(f"获取同步批次列表失败: {str(e)}")
+
+
+@app.get("/api/logs/batch/{batch_id}/summary")
+async def get_batch_summary(batch_id: str):
+    """获取单次同步批次的统计摘要"""
+    try:
+        summary = await Database.get_batch_summary(batch_id)
+        if summary is None:
+            return error("批次不存在", 404)
+        return success(summary)
+    except Exception as e:
+        logger.error(f"获取批次统计失败: {e}")
+        return error(f"获取批次统计失败: {str(e)}")
 
 
 @app.get("/api/logs/{log_id}")

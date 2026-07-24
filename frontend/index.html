@@ -98,6 +98,25 @@
         .pagination-wrap { margin-top: 16px; display: flex; justify-content: flex-end; }
 
         .filter-bar { margin-bottom: 16px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+
+        /* 同步批次概览卡片 */
+        .batch-card {
+            flex: 0 0 200px;
+            padding: 14px 16px;
+            border: 1px solid #e4e7ed;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: #fff;
+        }
+        .batch-card:hover { border-color: #409eff; box-shadow: 0 2px 12px rgba(0,0,0,0.1); }
+        .batch-card.is-active { border-color: #409eff; background: #ecf5ff; }
+        .batch-card .batch-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .batch-card .batch-time { font-size: 12px; color: #909399; }
+        .batch-card .batch-card-stats { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 13px; color: #606266; }
+        .batch-card .batch-card-stats .stat-failed { color: #f56c6c; }
+        .batch-card .batch-card-stats .stat-skipped { color: #e6a23c; }
+        .batch-active-filter { margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
     </style>
 </head>
 <body>
@@ -354,6 +373,36 @@
                 <div v-show="activeMenu === 'logs'">
                     <div class="section-title"><el-icon><Document /></el-icon> 同步日志</div>
 
+                    <!-- 同步批次概览 -->
+                    <el-card class="page-card" shadow="never" v-loading="batchLoading">
+                        <div class="section-title">
+                            <el-icon><DataLine /></el-icon> 同步批次概览
+                            <el-button text size="small" @click="loadBatches" style="margin-left: auto;" :icon="Refresh">刷新</el-button>
+                        </div>
+                        <div v-if="batches.length > 0" style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 4px;">
+                            <div
+                                v-for="batch in batches.slice(0, 5)"
+                                :key="batch.batch_id"
+                                class="batch-card"
+                                :class="{'is-active': logFilter.sync_batch_id === batch.batch_id}"
+                                @click="filterByBatch(batch.batch_id)"
+                            >
+                                <div class="batch-card-header">
+                                    <span class="batch-time">{{ formatTime(batch.sync_time) }}</span>
+                                    <el-tag :type="getBatchStatusTagType(batch.status)" size="small">{{ getBatchStatusText(batch.status) }}</el-tag>
+                                </div>
+                                <div class="batch-card-stats">
+                                    <span>创建{{ getOpTotal(batch, 'create_user') + getOpTotal(batch, 'create_ou') }}</span>
+                                    <span>修改{{ getOpTotal(batch, 'modify_user') + getOpTotal(batch, 'move_user') }}</span>
+                                    <span>禁用{{ getOpTotal(batch, 'disable_user') }}</span>
+                                    <span v-if="batch.failed > 0" class="stat-failed">失败{{ batch.failed }}</span>
+                                    <span v-if="batch.skipped > 0" class="stat-skipped">跳过{{ batch.skipped }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="empty-tip" v-else>暂无同步批次记录</div>
+                    </el-card>
+
                     <el-card class="page-card" shadow="never">
                         <!-- 筛选栏 -->
                         <div class="filter-bar">
@@ -363,16 +412,18 @@
                                 <el-option label="修改用户" value="modify_user" />
                                 <el-option label="移动用户" value="move_user" />
                                 <el-option label="禁用用户" value="disable_user" />
-                                <el-option label="创建安全组" value="create_group" />
-                                <el-option label="添加到组" value="add_to_group" />
-                                <el-option label="从组移除" value="remove_from_group" />
+                                <el-option label="同步摘要" value="sync_summary" />
                             </el-select>
                             <el-select v-model="logFilter.status" placeholder="状态" clearable style="width: 120px;" @change="loadLogs">
                                 <el-option label="成功" value="success" />
                                 <el-option label="失败" value="failed" />
+                                <el-option label="跳过" value="skipped" />
                             </el-select>
                             <el-button type="primary" @click="loadLogs" :icon="Search">查询</el-button>
                             <el-button @click="resetLogFilter" :icon="RefreshLeft">重置</el-button>
+                            <el-tag v-if="logFilter.sync_batch_id" type="info" closable @close="clearBatchFilter" style="margin-left: 4px;">
+                                已筛选批次
+                            </el-tag>
                         </div>
 
                         <!-- 日志表格 -->
@@ -390,12 +441,16 @@
                             <el-table-column prop="target_name" label="目标对象" width="150" />
                             <el-table-column prop="status" label="状态" width="80" align="center">
                                 <template #default="{ row }">
-                                    <el-tag :type="row.status === 'success' ? 'success' : 'danger'" size="small">
-                                        {{ row.status === 'success' ? '成功' : '失败' }}
+                                    <el-tag :type="getStatusTagType(row.status)" size="small">
+                                        {{ getLogStatusText(row.status) }}
                                     </el-tag>
                                 </template>
                             </el-table-column>
-                            <el-table-column prop="detail" label="详情" show-overflow-tooltip min-width="200" />
+                            <el-table-column prop="detail" label="详情" show-overflow-tooltip min-width="200">
+                                <template #default="{ row }">
+                                    {{ formatDetail(row.detail) }}
+                                </template>
+                            </el-table-column>
                             <el-table-column prop="error_message" label="错误信息" show-overflow-tooltip min-width="200">
                                 <template #default="{ row }">
                                     <span style="color: #f56c6c;">{{ row.error_message || '-' }}</span>
@@ -562,8 +617,13 @@ const app = createApp({
             page_size: 20,
             operation_type: '',
             status: '',
+            sync_batch_id: '',
         });
         const logLoading = ref(false);
+
+        // 同步批次数据
+        const batches = ref([]);
+        const batchLoading = ref(false);
 
         // 配置表单
         const configForm = reactive({
@@ -660,6 +720,7 @@ const app = createApp({
                 loadSyncStatus();
             } else if (index === 'logs') {
                 loadLogs();
+                loadBatches();
             } else if (index === 'settings') {
                 loadConfig();
                 loadScheduler();
@@ -748,6 +809,7 @@ const app = createApp({
             });
             if (logFilter.operation_type) params.append('operation_type', logFilter.operation_type);
             if (logFilter.status) params.append('status', logFilter.status);
+            if (logFilter.sync_batch_id) params.append('sync_batch_id', logFilter.sync_batch_id);
 
             const data = await apiGet('/api/logs?' + params.toString());
             logLoading.value = false;
@@ -761,7 +823,78 @@ const app = createApp({
             logFilter.page = 1;
             logFilter.operation_type = '';
             logFilter.status = '';
+            logFilter.sync_batch_id = '';
             loadLogs();
+        }
+
+        // ==================== 同步批次 ====================
+
+        async function loadBatches() {
+            batchLoading.value = true;
+            const data = await apiGet('/api/logs/batches');
+            batchLoading.value = false;
+            if (data) {
+                batches.value = data.batches || [];
+            }
+        }
+
+        function filterByBatch(batchId) {
+            // 点击已选中的批次卡片则取消筛选
+            if (logFilter.sync_batch_id === batchId) {
+                logFilter.sync_batch_id = '';
+            } else {
+                logFilter.sync_batch_id = batchId;
+                logFilter.page = 1;
+            }
+            loadLogs();
+        }
+
+        function clearBatchFilter() {
+            logFilter.sync_batch_id = '';
+            loadLogs();
+        }
+
+        // ==================== 格式化工具 ====================
+
+        function formatDetail(detail) {
+            if (!detail) return '-';
+            // 尝试解析 JSON 并格式化为可读文本
+            try {
+                const obj = JSON.parse(detail);
+                const parts = [];
+                for (const [key, value] of Object.entries(obj)) {
+                    // 跳过嵌套对象（如 summary 统计），只显示简单值
+                    if (typeof value === 'object' && value !== null) {
+                        continue;
+                    }
+                    parts.push(`${changeLabel(key) || key}: ${value}`);
+                }
+                return parts.length > 0 ? parts.join('，') : detail;
+            } catch {
+                // 非 JSON 字符串，直接返回
+                return detail;
+            }
+        }
+
+        function getLogStatusText(status) {
+            const map = { 'success': '成功', 'failed': '失败', 'skipped': '跳过' };
+            return map[status] || status;
+        }
+
+        function getBatchStatusText(status) {
+            const map = { 'success': '成功', 'partial': '部分成功', 'skipped': '已跳过', 'failed': '失败' };
+            return map[status] || status;
+        }
+
+        function getBatchStatusTagType(status) {
+            const map = { 'success': 'success', 'partial': 'warning', 'skipped': 'warning', 'failed': 'danger' };
+            return map[status] || 'info';
+        }
+
+        function getOpTotal(batch, opType) {
+            if (!batch.operations || !batch.operations[opType]) return 0;
+            const ops = batch.operations[opType];
+            return (ops.success || 0) + (ops.failed || 0) + (ops.skipped || 0);
         }
 
         // ==================== 配置 ====================
@@ -869,17 +1002,17 @@ const app = createApp({
         }
 
         function getStatusTagType(status) {
-            const map = { 'success': 'success', 'failed': 'danger', 'partial': 'warning', 'running': 'primary', 'none': 'info' };
+            const map = { 'success': 'success', 'failed': 'danger', 'partial': 'warning', 'running': 'primary', 'none': 'info', 'skipped': 'warning' };
             return map[status] || 'info';
         }
 
         function getOpText(type) {
-            const map = { 'create_ou': '创建OU', 'create_user': '创建用户', 'modify_user': '修改用户', 'move_user': '移动用户', 'disable_user': '禁用用户', 'create_group': '创建安全组', 'add_to_group': '添加到组', 'remove_from_group': '从组移除' };
+            const map = { 'create_ou': '创建OU', 'create_user': '创建用户', 'modify_user': '修改用户', 'move_user': '移动用户', 'disable_user': '禁用用户', 'sync_summary': '同步摘要' };
             return map[type] || type;
         }
 
         function getOpTagType(type) {
-            const map = { 'create_ou': 'primary', 'create_user': 'success', 'modify_user': 'warning', 'move_user': 'info', 'disable_user': 'danger', 'create_group': 'primary', 'add_to_group': 'success', 'remove_from_group': 'warning' };
+            const map = { 'create_ou': 'primary', 'create_user': 'success', 'modify_user': 'warning', 'move_user': 'info', 'disable_user': 'danger', 'sync_summary': 'info' };
             return map[type] || 'info';
         }
 
@@ -912,6 +1045,8 @@ const app = createApp({
             logData,
             logFilter,
             logLoading,
+            batches,
+            batchLoading,
             configForm,
             schedulerForm,
             testDingTalkLoading,
@@ -925,6 +1060,14 @@ const app = createApp({
             quickSync,
             loadLogs,
             resetLogFilter,
+            loadBatches,
+            filterByBatch,
+            clearBatchFilter,
+            formatDetail,
+            getLogStatusText,
+            getBatchStatusText,
+            getBatchStatusTagType,
+            getOpTotal,
             loadConfig,
             saveConfig,
             testDingTalk,
