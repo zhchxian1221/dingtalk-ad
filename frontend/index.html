@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>钉钉AD域控同步系统</title>
+    <title>睿尔曼智能钉钉域控同步系统</title>
     <!-- ElementPlus CSS -->
     <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css">
     <!-- Vue3 -->
@@ -107,7 +107,7 @@
         <el-header class="app-header" height="60px">
             <div class="logo">
                 <span class="logo-icon">🔄</span>
-                <span>钉钉AD域控同步系统</span>
+                <span>睿尔曼智能钉钉域控同步系统</span>
             </div>
             <div class="header-right">
                 <span v-if="syncStatus.is_running" style="color: #ffd54f;">● 同步进行中</span>
@@ -446,13 +446,13 @@
                                 <el-input v-model="configForm.ad_server" placeholder="如 192.168.1.10:389 或 192.168.1.10:636" />
                             </el-form-item>
                             <el-form-item label="管理员账号">
-                                <el-input v-model="configForm.ad_username" placeholder="如 administrator@your-domain.com" />
+                                <el-input v-model="configForm.ad_username" placeholder="如 administrator@corp.realman-robot.com" />
                             </el-form-item>
                             <el-form-item label="密码">
                                 <el-input v-model="configForm.ad_password" type="password" show-password placeholder="管理员密码" />
                             </el-form-item>
                             <el-form-item label="Base DN">
-                                <el-input v-model="configForm.ad_base_dn" placeholder="OU=Users,DC=example,DC=com" />
+                                <el-input v-model="configForm.ad_base_dn" placeholder="OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com" />
                             </el-form-item>
                             <el-form-item>
                                 <el-button type="primary" @click="testAD" :loading="testADLoading" :icon="Link">测试连接</el-button>
@@ -572,9 +572,9 @@ const app = createApp({
             ad_server: '',
             ad_username: '',
             ad_password: '',
-            ad_base_dn: 'OU=Users,DC=example,DC=com',
+            ad_base_dn: 'OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com',
             sync_strategy_disable: 'true',
-            initial_password: 'P@ssw0rd2026',
+            initial_password: 'Realman@2026',
         });
 
         // 定时任务表单
@@ -774,9 +774,9 @@ const app = createApp({
                 configForm.ad_server = data.ad_server || '';
                 configForm.ad_username = data.ad_username || '';
                 configForm.ad_password = data.ad_password || '';
-                configForm.ad_base_dn = data.ad_base_dn || 'OU=Users,DC=example,DC=com';
+                configForm.ad_base_dn = data.ad_base_dn || 'OU=Users,OU=REALMAN,DC=corp,DC=realman-robot,DC=com';
                 configForm.sync_strategy_disable = data.sync_strategy_disable || 'true';
-                configForm.initial_password = data.initial_password || 'P@ssw0rd2026';
+                configForm.initial_password = data.initial_password || 'Realman@2026';
             }
         }
 

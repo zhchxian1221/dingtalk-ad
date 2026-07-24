@@ -18,7 +18,6 @@ from pypinyin import lazy_pinyin
 
 logger = logging.getLogger(__name__)
 
-
 def escape_dn_value(value: str) -> str:
     """
     转义LDAP DN中的特殊字符
@@ -40,7 +39,6 @@ def escape_dn_value(value: str) -> str:
     value = value.replace("=", "\\=")
     return value
 
-
 def get_domain_from_base_dn(base_dn: str) -> str:
     """
     从Base DN中提取域名
@@ -60,7 +58,6 @@ def get_domain_from_base_dn(base_dn: str) -> str:
         if part.upper().startswith("DC="):
             dc_parts.append(part[3:])
     return ".".join(dc_parts)
-
 
 def clean_sam_account_name(raw: str) -> str:
     """
@@ -86,7 +83,6 @@ def clean_sam_account_name(raw: str) -> str:
         result = result[:20]
     return result
 
-
 def chinese_to_pinyin(text: str) -> str:
     """
     将中文文本转换为拼音（无声调）
@@ -108,7 +104,6 @@ def chinese_to_pinyin(text: str) -> str:
     if not text:
         return ""
     return "".join(lazy_pinyin(text))
-
 
 def generate_sam_account_name(user_data: dict) -> str:
     """
@@ -164,7 +159,6 @@ def generate_sam_account_name(user_data: dict) -> str:
     # 最终兜底：用name的hash生成
     return f"user{abs(hash(name)) % 100000}"
 
-
 def get_dept_ou_path(dept_id: int, dept_map: dict, base_dn: str) -> str:
     """
     递归计算部门在AD中对应的OU完整路径
@@ -195,7 +189,6 @@ def get_dept_ou_path(dept_id: int, dept_map: dict, base_dn: str) -> str:
     ou_name = escape_dn_value(dept["name"])
     return f"OU={ou_name},{parent_path}"
 
-
 def get_dept_depth(dept_id: int, dept_map: dict) -> int:
     """
     计算部门在组织架构中的层级深度（根部门深度为0）
@@ -221,68 +214,6 @@ def get_dept_depth(dept_id: int, dept_map: dict) -> int:
         current = parent_id
     return depth
 
-
-def get_groups_ou_path(base_dn: str, config: dict = None) -> str:
-    """
-    获取安全组OU路径
-    如果config中有ad_groups_ou且非空，使用配置值
-    否则从base_dn自动推导：OU=Users,DC=... → OU=Groups,DC=...
-
-    Args:
-        base_dn: AD根OU的DN
-        config: 配置字典（可选）
-
-    Returns:
-        安全组OU的DN路径
-    """
-    if config and config.get("ad_groups_ou", "").strip():
-        return config["ad_groups_ou"].strip()
-    # 自动推导：替换第一个OU=xxx为OU=Groups
-    parts = base_dn.split(",", 1)
-    if len(parts) > 1:
-        return f"OU=Groups,{parts[1]}"
-    return f"OU=Groups,{base_dn}"
-
-
-def get_security_group_name(dept_name: str) -> str:
-    """
-    生成部门对应的安全组名称
-    命名规则：SG_<部门名称>
-    例如：研发部 → SG_研发部
-
-    Args:
-        dept_name: 部门名称
-
-    Returns:
-        安全组CN名称
-    """
-    return f"SG_{dept_name}"
-
-
-def get_safe_group_sam(dept_name: str) -> str:
-    """
-    为安全组生成合法的 sAMAccountName
-    AD 要求: 最长20字符, 不含特殊字符, 推荐纯ASCII
-
-    Args:
-        dept_name: 部门名称
-
-    Returns:
-        合法的 sAMAccountName (纯ASCII, 最长20字符)
-    """
-    # 尝试从部门名中提取已有英文/数字
-    ascii_part = re.sub(r'[^a-zA-Z0-9_-]', '', dept_name)
-    if ascii_part:
-        base = f"SG_{ascii_part}"
-    else:
-        # 中文部门名 → 转拼音
-        py = lazy_pinyin(dept_name)
-        base = "SG_" + "".join(py)
-
-    # 截断到20字符
-    return re.sub(r'[^a-zA-Z0-9_-]', '_', base)[:20]
-
-
 def encode_ad_password(password: str) -> bytes:
     """
     将密码编码为AD的unicodePwd属性格式
@@ -295,7 +226,6 @@ def encode_ad_password(password: str) -> bytes:
         编码后的密码字节串
     """
     return f'"{password}"'.encode("utf-16-le")
-
 
 class ADSyncService:
     """AD域LDAP操作服务"""
@@ -799,165 +729,17 @@ class ADSyncService:
             logger.error(f"启用AD用户异常: {dn}, {e}")
             return False
 
-    def create_security_group(self, group_name: str, parent_dn: str) -> bool:
-        """
-        创建安全组（Global Security Group）
-
-        Args:
-            group_name: 组名称（如 SG_研发部）
-            parent_dn: 父OU的DN
-
-        Returns:
-            是否创建成功（已存在也返回True）
-        """
-        self._ensure_connection()
-        escaped_name = escape_dn_value(group_name)
-        group_dn = f"CN={escaped_name},{parent_dn}"
-        # 生成合法 sAMAccountName: 去除非ASCII, 截断20字符
-        dept_name = group_name[3:] if group_name.startswith("SG_") else group_name
-        safe_sam = get_safe_group_sam(dept_name)
-        try:
-            result = self.conn.add(group_dn, attributes={
-                "objectClass": ["top", "group"],
-                "cn": group_name,
-                "sAMAccountName": safe_sam,
-                "groupType": -2147483646,  # Global Security Group (ADS_GROUP_TYPE_GLOBAL_GROUP | ADS_GROUP_TYPE_SECURITY_ENABLED)
-            })
-            if result:
-                logger.info(f"创建安全组成功: {group_dn} (sAM={safe_sam})")
-                return True
-            msg = str(self.conn.result.get("message", "")).lower()
-            if "already exists" in msg or "exists" in msg:
-                logger.info(f"安全组已存在: {group_dn}")
-                return True
-            logger.error(f"创建安全组失败: {group_dn}, result={self.conn.result}")
-            return False
         except LDAPException as e:
             logger.error(f"创建安全组异常: {group_dn}, {e}")
             return False
 
-    def add_user_to_group(self, user_dn: str, group_dn: str) -> bool:
-        """
-        将用户添加到安全组
-
-        Args:
-            user_dn: 用户DN
-            group_dn: 安全组DN
-
-        Returns:
-            是否成功（已在组中也返回True）
-        """
-        self._ensure_connection()
-        try:
-            result = self.conn.modify(group_dn, {
-                "member": [(MODIFY_ADD, [user_dn])]
-            })
-            if result:
-                logger.info(f"添加用户到组成功: {user_dn} → {group_dn}")
-                return True
-            msg = str(self.conn.result.get("message", "")).lower()
-            if "already" in msg or "exists" in msg or "attribute" in msg:
-                # 已在组中
-                return True
-            logger.error(f"添加用户到组失败: {user_dn} → {group_dn}, {self.conn.result}")
-            return False
         except LDAPException as e:
             logger.error(f"添加用户到组异常: {user_dn} → {group_dn}, {e}")
             return False
 
-    def remove_user_from_group(self, user_dn: str, group_dn: str) -> bool:
-        """
-        将用户从安全组移除
-
-        Args:
-            user_dn: 用户DN
-            group_dn: 安全组DN
-
-        Returns:
-            是否成功（不在组中也返回True）
-        """
-        self._ensure_connection()
-        try:
-            result = self.conn.modify(group_dn, {
-                "member": [(MODIFY_DELETE, [user_dn])]
-            })
-            if result:
-                logger.info(f"从组移除用户成功: {user_dn} ← {group_dn}")
-                return True
-            msg = str(self.conn.result.get("message", "")).lower()
-            if "no such" in msg or "not found" in msg or "member" in msg:
-                # 不在组中
-                return True
-            logger.error(f"从组移除用户失败: {user_dn} ← {group_dn}, {self.conn.result}")
-            return False
         except LDAPException as e:
             logger.error(f"从组移除用户异常: {user_dn} ← {group_dn}, {e}")
             return False
-
-    def get_user_group_memberships(self, user_dn: str, groups_ou: str) -> list[str]:
-        """
-        获取用户在指定OU下所属的安全组DN列表
-
-        Args:
-            user_dn: 用户DN
-            groups_ou: 安全组OU的DN（只返回此OU下的组）
-
-        Returns:
-            安全组DN列表
-        """
-        self._ensure_connection()
-        groups = []
-        try:
-            self.conn.search(
-                search_base=user_dn,
-                search_filter="(objectClass=user)",
-                search_scope=BASE,
-                attributes=["memberOf"]
-            )
-            for entry in self.conn.entries:
-                member_of_attr = entry.get("memberOf")
-                if member_of_attr:
-                    values = member_of_attr.values if hasattr(member_of_attr, 'values') else [member_of_attr.value]
-                    for g in values:
-                        g_str = str(g)
-                        # 只返回groups_ou下的安全组
-                        if g_str.lower().endswith(groups_ou.lower()):
-                            groups.append(g_str)
-        except LDAPException as e:
-            logger.error(f"获取用户组成员关系异常: {user_dn}, {e}")
-        return groups
-
-    def get_existing_groups(self, ou_dn: str) -> list[dict]:
-        """
-        获取指定OU下的所有安全组
-
-        Args:
-            ou_dn: 安全组OU的DN
-
-        Returns:
-            安全组列表，每个元素包含: cn, dn, members(list[dn])
-        """
-        self._ensure_connection()
-        groups = []
-        try:
-            self.conn.search(
-                search_base=ou_dn,
-                search_filter="(objectClass=group)",
-                search_scope=SUBTREE,
-                attributes=["cn", "distinguishedName", "member"]
-            )
-            for entry in self.conn.entries:
-                cn = self._safe_attr(entry, "cn")
-                dn = self._safe_attr(entry, "distinguishedName")
-                members = []
-                member_attr = entry.get("member")
-                if member_attr:
-                    vals = member_attr.values if hasattr(member_attr, 'values') else ([member_attr.value] if member_attr.value else [])
-                    members = [str(v) for v in vals]
-                groups.append({"cn": cn, "dn": dn, "members": members})
-        except LDAPException as e:
-            logger.error(f"获取安全组列表异常: {e}")
-        return groups
 
     def delete_user(self, dn: str) -> bool:
         """
@@ -981,24 +763,6 @@ class ADSyncService:
             logger.error(f"删除AD用户异常: {dn}, {e}")
             return False
 
-    def delete_group(self, dn: str) -> bool:
-        """
-        删除AD安全组
-
-        Args:
-            dn: 安全组DN
-
-        Returns:
-            是否删除成功
-        """
-        self._ensure_connection()
-        try:
-            result = self.conn.delete(dn)
-            if result:
-                logger.info(f"删除AD安全组成功: {dn}")
-                return True
-            logger.error(f"删除AD安全组失败: {dn}, {self.conn.result}")
-            return False
         except LDAPException as e:
             logger.error(f"删除AD安全组异常: {dn}, {e}")
             return False
@@ -1025,19 +789,18 @@ class ADSyncService:
             logger.error(f"删除OU异常: {dn}, {e}")
             return False
 
-    def clear_all_data(self, base_dn: str, groups_ou: str) -> dict:
+    def clear_all_data(self, base_dn: str) -> dict:
         """
-        清空AD中由本工具创建的所有数据（用户、OU、安全组）
+        清空AD中由本工具创建的所有数据（用户、OU）
 
         Args:
             base_dn: AD根OU的DN
-            groups_ou: 安全组OU的DN（优先在此OU下删安全组）
 
         Returns:
             清理结果统计
         """
         self._ensure_connection()
-        result = {"deleted_users": 0, "deleted_groups": 0, "deleted_ous": 0, "failed": 0}
+        result = {"deleted_users": 0, "deleted_ous": 0, "failed": 0}
 
         # 1. 删除 base_dn 下的所有用户
         try:
@@ -1056,44 +819,6 @@ class ADSyncService:
         except LDAPException as e:
             logger.error(f"清空用户失败: {e}")
             result["failed"] += 1
-
-        # 2. 删除安全组：先在 groups_ou 下找，再在 base_dn 子树兜底找
-        group_dns = []
-        # 2a. 先在 groups_ou 下搜索
-        if groups_ou:
-            try:
-                self.conn.search(
-                    search_base=groups_ou,
-                    search_filter="(objectClass=group)",
-                    search_scope=SUBTREE,
-                    attributes=["distinguishedName"]
-                )
-                group_dns = [str(entry.distinguishedName) for entry in self.conn.entries]
-            except LDAPException as e:
-                logger.error(f"在 groups_ou 搜索安全组失败: {e}")
-
-        # 2b. 在 base_dn 子树兜底（防止安全组不在 groups_ou 下的情况）
-        try:
-            self.conn.search(
-                search_base=base_dn,
-                search_filter="(objectClass=group)",
-                search_scope=SUBTREE,
-                attributes=["distinguishedName"]
-            )
-            base_group_dns = [str(entry.distinguishedName) for entry in self.conn.entries]
-            # 合并去重
-            existing_set = set(g.lower() for g in group_dns)
-            for g in base_group_dns:
-                if g.lower() not in existing_set:
-                    group_dns.append(g)
-        except LDAPException as e:
-            logger.error(f"在 base_dn 搜索安全组失败: {e}")
-
-        for group_dn in group_dns:
-            if self.delete_group(group_dn):
-                result["deleted_groups"] += 1
-            else:
-                result["failed"] += 1
 
         # 3. 删除 base_dn 下的所有子OU（从深到浅，确保先删叶子）
         try:
@@ -1118,7 +843,6 @@ class ADSyncService:
             result["failed"] += 1
 
         return result
-
 
 # ==================== 同步逻辑 ====================
 
@@ -1231,83 +955,31 @@ async def preview_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
                 })
 
         # 8. 计算需要禁用的用户
+        # 安全保护：防止钉钉API异常返回空数据时误判全量离职
         disabled_users = []
-        for name, ad_user in ad_user_map.items():
-            if name not in dingtalk_user_map:
-                uac = ad_user.get("userAccountControl", 512)
-                if uac != 514:  # 未禁用
-                    disabled_users.append({
-                        "name": name,
-                        "dn": ad_user.get("dn", ""),
-                        "current_uac": uac,
-                        "sAMAccountName": ad_user.get("sAMAccountName", ""),
-                    })
+        dd_count = len(dingtalk_users)
+        ad_count = len(ad_users)
+        skip_disable_preview = False
 
-        # 9. 计算安全组同步差异
-        groups_ou = get_groups_ou_path(base_dn, config)
+        if dd_count == 0:
+            skip_disable_preview = True
+            logger.warning(f"预览：钉钉API返回0个用户，疑似API异常，禁用预览不可信")
+        elif ad_count > 0 and dd_count < ad_count * 0.3:
+            skip_disable_preview = True
+            logger.warning(f"预览：钉钉用户数({dd_count})仅为AD用户数({ad_count})的{dd_count*100//ad_count}%，禁用预览不可信")
 
-        # 获取所有主部门覆盖
-        primary_depts_override = {}
-        if db:
-            primary_depts_override = await db.get_all_primary_depts()
+        if not skip_disable_preview:
+            for name, ad_user in ad_user_map.items():
+                if name not in dingtalk_user_map:
+                    uac = ad_user.get("userAccountControl", 512)
+                    if uac != 514:  # 未禁用
+                        disabled_users.append({
+                            "name": name,
+                            "dn": ad_user.get("dn", ""),
+                            "current_uac": uac,
+                            "sAMAccountName": ad_user.get("sAMAccountName", ""),
+                        })
 
-        # 计算需要创建的安全组
-        new_groups = []
-        for dept in dingtalk_depts:
-            parent_id = dept.get("parent_id", 0)
-            if parent_id is None:
-                parent_id = 0
-            # 跳过根部门（parent_id 为 0 或钉钉标准 dept_id 为 1）
-            if parent_id == 0 or dept["dept_id"] == 1:
-                continue
-            group_name = get_security_group_name(dept["name"])
-            # 预览阶段不查AD，只列出需要创建的
-            new_groups.append({
-                "name": group_name,
-                "dept_name": dept["name"],
-                "dept_id": dept["dept_id"],
-            })
-
-        # 计算用户的组成员关系变更
-        group_membership = []
-        for name, dt_user in dingtalk_user_map.items():
-            dept_id_list = dt_user.get("dept_id_list", [])
-            if len(dept_id_list) <= 1:
-                continue  # 只有一个部门的用户不需要加入安全组
-
-            userid = dt_user.get("userid", "")
-            # 确定主部门
-            override_dept = primary_depts_override.get(userid)
-            primary_dept_id = override_dept if override_dept else (dept_id_list[0] if dept_id_list else 1)
-
-            # 所有部门对应的安全组
-            expected_groups = []
-            for did in dept_id_list:
-                dept_info = dept_map.get(did)
-                if not dept_info:
-                    continue
-                parent_id = dept_info.get("parent_id", 0)
-                if parent_id is None:
-                    parent_id = 0
-                # 跳过根部门（parent_id 为 0 或钉钉标准 dept_id 为 1）
-                if did == 1 or parent_id == 0:
-                    continue
-                group_name = get_security_group_name(dept_info["name"])
-                expected_groups.append({
-                    "dept_id": did,
-                    "dept_name": dept_info["name"],
-                    "group_name": group_name,
-                })
-
-            group_membership.append({
-                "name": name,
-                "userid": userid,
-                "dept_count": len(dept_id_list),
-                "primary_dept_id": primary_dept_id,
-                "primary_dept_name": dept_map.get(primary_dept_id, {}).get("name", "根部门"),
-                "is_override": userid in primary_depts_override,
-                "expected_groups": expected_groups,
-            })
     finally:
         ad_service.disconnect()
 
@@ -1316,13 +988,10 @@ async def preview_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
         "new_users": new_users,
         "modified_users": modified_users,
         "disabled_users": disabled_users,
-        "new_groups": new_groups,
-        "group_membership": group_membership,
         "dingtalk_user_count": len(dingtalk_users),
         "ad_user_count": len(ad_users),
         "dingtalk_dept_count": len(dingtalk_depts),
     }
-
 
 async def execute_sync(dingtalk_client, ad_service: ADSyncService, config: dict, db) -> dict:
     """
@@ -1334,8 +1003,7 @@ async def execute_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
     3. 创建缺失的OU
     4. 创建/修改/移动用户
     5. 禁用AD中多余的账号
-    6. 创建部门安全组并同步用户组成员关系
-    7. 记录同步日志
+    6. 记录同步日志
 
     Args:
         dingtalk_client: 钉钉客户端
@@ -1573,237 +1241,71 @@ async def execute_sync(dingtalk_client, ad_service: ADSyncService, config: dict,
                     )
 
         # 8. 禁用AD中多余的账号（钉钉中已不存在的用户）
-        for name, ad_user in ad_user_map.items():
-            if name in dingtalk_user_map:
-                continue
+        # 安全保护：防止钉钉API异常返回空数据时全量误禁用
+        dd_count = len(dingtalk_users)
+        ad_count = len(ad_users)
+        skip_disable = False
+        disable_reason = ""
 
-            uac = ad_user.get("userAccountControl", 512)
-            if uac == 514:
-                continue  # 已经禁用
+        if dd_count == 0:
+            skip_disable = True
+            disable_reason = f"钉钉API返回0个用户，疑似API异常，跳过禁用步骤以保护AD数据（AD现有{ad_count}个用户）"
+            logger.warning(disable_reason)
+        elif ad_count > 0 and dd_count < ad_count * 0.3:
+            ratio = dd_count * 100 // ad_count
+            skip_disable = True
+            disable_reason = f"钉钉用户数({dd_count})仅为AD用户数({ad_count})的{ratio}%，疑似API异常，跳过禁用步骤"
+            logger.warning(disable_reason)
 
-            total += 1
-            try:
-                result = await asyncio.to_thread(ad_service.disable_user, ad_user["dn"])
-                if result:
-                    success_count += 1
+        if not skip_disable:
+            for name, ad_user in ad_user_map.items():
+                if name in dingtalk_user_map:
+                    continue
+
+                uac = ad_user.get("userAccountControl", 512)
+                if uac == 514:
+                    continue  # 已经禁用
+
+                total += 1
+                try:
+                    result = await asyncio.to_thread(ad_service.disable_user, ad_user["dn"])
+                    if result:
+                        success_count += 1
+                        await db.add_log(
+                            operation_type="disable_user",
+                            target_dn=ad_user["dn"],
+                            target_name=name,
+                            status="success",
+                            detail=json.dumps({"reason": "钉钉中不存在该用户"}, ensure_ascii=False)
+                        )
+                    else:
+                        failed_count += 1
+                        await db.add_log(
+                            operation_type="disable_user",
+                            target_dn=ad_user["dn"],
+                            target_name=name,
+                            status="failed",
+                            error_message="禁用用户失败"
+                        )
+                except Exception as e:
+                    failed_count += 1
                     await db.add_log(
                         operation_type="disable_user",
                         target_dn=ad_user["dn"],
                         target_name=name,
-                        status="success",
-                        detail=json.dumps({"reason": "钉钉中不存在该用户"}, ensure_ascii=False)
-                    )
-                else:
-                    failed_count += 1
-                    await db.add_log(
-                        operation_type="disable_user",
-                        target_dn=ad_user["dn"],
-                        target_name=name,
-                        status="failed",
-                        error_message="禁用用户失败"
-                    )
-            except Exception as e:
-                failed_count += 1
-                await db.add_log(
-                    operation_type="disable_user",
-                    target_dn=ad_user["dn"],
-                    target_name=name,
-                    status="failed",
-                    error_message=str(e)
-                )
-
-        # 9. 安全组同步
-        groups_ou = get_groups_ou_path(base_dn, config)
-
-        # 确保Groups OU存在
-        existing_ous_lower = [ou.lower() for ou in existing_ous]
-        if groups_ou.lower() not in existing_ous_lower:
-            # 从groups_ou提取OU名称和父DN
-            ou_parts = groups_ou.split(",", 1)
-            ou_name = ou_parts[0].split("=")[1] if "=" in ou_parts[0] else "Groups"
-            parent_dn = ou_parts[1] if len(ou_parts) > 1 else base_dn
-            total += 1
-            try:
-                result = await asyncio.to_thread(ad_service.create_ou, ou_name, parent_dn)
-                if result:
-                    success_count += 1
-                    existing_ous.append(groups_ou)
-                    await db.add_log(
-                        operation_type="create_ou",
-                        target_dn=groups_ou,
-                        target_name=ou_name,
-                        status="success",
-                        detail=json.dumps({"ou_name": ou_name, "parent": parent_dn}, ensure_ascii=False)
-                    )
-                else:
-                    failed_count += 1
-                    await db.add_log(
-                        operation_type="create_ou",
-                        target_dn=groups_ou,
-                        target_name=ou_name,
-                        status="failed",
-                        error_message="创建Groups OU失败"
-                    )
-            except Exception as e:
-                failed_count += 1
-                await db.add_log(
-                    operation_type="create_ou",
-                    target_dn=groups_ou,
-                    target_name="Groups",
-                    status="failed",
-                    error_message=str(e)
-                )
-
-        # 获取AD现有安全组
-        ad_groups = await asyncio.to_thread(ad_service.get_existing_groups, groups_ou)
-        ad_group_map = {g["cn"]: g for g in ad_groups}
-
-        # 为每个部门创建安全组（如果不存在）
-        dept_group_map = {}  # dept_id -> group_dn
-        for dept in dingtalk_depts:
-            parent_id = dept.get("parent_id", 0)
-            if parent_id is None:
-                parent_id = 0
-            # 跳过根部门（parent_id 为 0 或钉钉标准 dept_id 为 1）
-            if parent_id == 0 or dept["dept_id"] == 1:
-                continue
-            group_name = get_security_group_name(dept["name"])
-            escaped_group = escape_dn_value(group_name)
-            group_dn = f"CN={escaped_group},{groups_ou}"
-            dept_group_map[dept["dept_id"]] = group_dn
-
-            if group_name not in ad_group_map:
-                total += 1
-                try:
-                    result = await asyncio.to_thread(ad_service.create_security_group, group_name, groups_ou)
-                    if result:
-                        success_count += 1
-                        await db.add_log(
-                            operation_type="create_group",
-                            target_dn=group_dn,
-                            target_name=group_name,
-                            status="success",
-                            detail=json.dumps({"dept_id": dept["dept_id"], "dept_name": dept["name"]}, ensure_ascii=False)
-                        )
-                    else:
-                        failed_count += 1
-                        await db.add_log(
-                            operation_type="create_group",
-                            target_dn=group_dn,
-                            target_name=group_name,
-                            status="failed",
-                            error_message="创建安全组失败"
-                        )
-                except Exception as e:
-                    failed_count += 1
-                    await db.add_log(
-                        operation_type="create_group",
-                        target_dn=group_dn,
-                        target_name=group_name,
                         status="failed",
                         error_message=str(e)
                     )
+        else:
+            await db.add_log(
+                operation_type="disable_user",
+                target_dn="N/A",
+                target_name="[安全保护]",
+                status="skipped",
+                detail=json.dumps({"reason": disable_reason}, ensure_ascii=False)
+            )
 
-        # 同步用户组成员关系
-        primary_depts_override = await db.get_all_primary_depts()
-
-        for name, dt_user in dingtalk_user_map.items():
-            dept_id_list = dt_user.get("dept_id_list", [])
-            if len(dept_id_list) <= 1:
-                continue
-
-            userid = dt_user.get("userid", "")
-            # 确定用户DN（从AD用户映射中获取）
-            ad_user = ad_user_map.get(name)
-            if not ad_user:
-                continue  # 新创建的用户暂不处理（下次同步处理）
-            user_dn = ad_user.get("dn", "")
-            if not user_dn:
-                continue
-
-            # 计算期望的安全组DN列表
-            expected_group_dns = set()
-            for did in dept_id_list:
-                if did in dept_group_map:
-                    expected_group_dns.add(dept_group_map[did].lower())
-
-            # 获取当前用户在Groups OU下的安全组
-            current_group_dns = set()
-            try:
-                current_groups = await asyncio.to_thread(ad_service.get_user_group_memberships, user_dn, groups_ou)
-                current_group_dns = set(g.lower() for g in current_groups)
-            except Exception as e:
-                logger.warning(f"获取用户组成员关系失败: {user_dn}, {e}")
-
-            # 需要添加的组
-            to_add = expected_group_dns - current_group_dns
-            for group_dn in to_add:
-                total += 1
-                try:
-                    result = await asyncio.to_thread(ad_service.add_user_to_group, user_dn, group_dn)
-                    if result:
-                        success_count += 1
-                        await db.add_log(
-                            operation_type="add_to_group",
-                            target_dn=group_dn,
-                            target_name=name,
-                            status="success",
-                            detail=json.dumps({"user_dn": user_dn, "group_dn": group_dn}, ensure_ascii=False)
-                        )
-                    else:
-                        failed_count += 1
-                        await db.add_log(
-                            operation_type="add_to_group",
-                            target_dn=group_dn,
-                            target_name=name,
-                            status="failed",
-                            error_message="添加到组失败"
-                        )
-                except Exception as e:
-                    failed_count += 1
-                    await db.add_log(
-                        operation_type="add_to_group",
-                        target_dn=group_dn,
-                        target_name=name,
-                        status="failed",
-                        error_message=str(e)
-                    )
-
-            # 需要移除的组
-            to_remove = current_group_dns - expected_group_dns
-            for group_dn in to_remove:
-                total += 1
-                try:
-                    result = await asyncio.to_thread(ad_service.remove_user_from_group, user_dn, group_dn)
-                    if result:
-                        success_count += 1
-                        await db.add_log(
-                            operation_type="remove_from_group",
-                            target_dn=group_dn,
-                            target_name=name,
-                            status="success",
-                            detail=json.dumps({"user_dn": user_dn, "group_dn": group_dn}, ensure_ascii=False)
-                        )
-                    else:
-                        failed_count += 1
-                        await db.add_log(
-                            operation_type="remove_from_group",
-                            target_dn=group_dn,
-                            target_name=name,
-                            status="failed",
-                            error_message="从组移除失败"
-                        )
-                except Exception as e:
-                    failed_count += 1
-                    await db.add_log(
-                        operation_type="remove_from_group",
-                        target_dn=group_dn,
-                        target_name=name,
-                        status="failed",
-                        error_message=str(e)
-                    )
-
-        # 10. 更新同步状态
+        # 9. 更新同步状态
         final_status = "success" if failed_count == 0 else "partial"
         await db.update_sync_status(
             is_running=False,

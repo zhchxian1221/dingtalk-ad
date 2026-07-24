@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from database import Database, init_db
 from dingtalk_api import DingTalkClient
-from ad_sync import ADSyncService, preview_sync, execute_sync, get_groups_ou_path
+from ad_sync import ADSyncService, preview_sync, execute_sync
 from scheduler import scheduler, setup_scheduler, update_schedule
 
 # 日志配置
@@ -110,7 +110,6 @@ class ConfigUpdate(BaseModel):
     ad_username: Optional[str] = None
     ad_password: Optional[str] = None
     ad_base_dn: Optional[str] = None
-    ad_groups_ou: Optional[str] = None
     sync_strategy_disable: Optional[str] = None
     initial_password: Optional[str] = None
 
@@ -291,7 +290,7 @@ async def test_ad_connection():
 
 @app.post("/api/ad/clear-all")
 async def clear_all_ad_data():
-    """清空AD中所有由本工具创建的数据（用户、OU、安全组）并清空本地数据库记录"""
+    """清空AD中所有由本工具创建的数据（用户、OU）并清空本地数据库记录"""
     try:
         # 检查同步状态
         status = await Database.get_sync_status()
@@ -301,11 +300,10 @@ async def clear_all_ad_data():
         ad_service = await create_ad_service()
         config = await Database.get_all_config()
         base_dn = config.get("ad_base_dn", "OU=Users,DC=example,DC=com")
-        groups_ou = get_groups_ou_path(base_dn, config)
 
         try:
             ad_service.connect()
-            result = await asyncio.to_thread(ad_service.clear_all_data, base_dn, groups_ou)
+            result = await asyncio.to_thread(ad_service.clear_all_data, base_dn)
             await Database.clear_all_data()
             logger.info(f"清空重建完成: {result}")
             return success({

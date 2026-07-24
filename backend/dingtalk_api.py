@@ -191,7 +191,13 @@ class DingTalkClient:
                     seen_userids.add(userid)
                     all_users.append(user)
 
-        logger.info(f"获取到 {len(all_users)} 个钉钉用户（去重后）")
+        dept_count = len(departments)
+        user_count = len(all_users)
+        logger.info(f"获取到 {user_count} 个钉钉用户（去重后），共遍历 {dept_count} 个部门")
+
+        if user_count == 0 and dept_count > 0:
+            logger.warning(f"遍历了{dept_count}个部门但未获取到任何用户，可能是钉钉API异常（限流/Token过期/权限不足）")
+
         return all_users
 
     async def close(self):
